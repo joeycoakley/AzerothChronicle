@@ -7,8 +7,9 @@ session. Anything that fails becomes a fix in the API compatibility layer in
 Run `/ac discovery on` before starting so each event prints what it found, and
 `/ac apis` once per new client to see which APIs resolved at all.
 
-Status below reflects the Classic Era 1.15.9 bring-up run on 2026-09-13,
-character Syladre, quest 456 "The Balance of Nature" in Shadowglen.
+Status below reflects the Classic Era 1.15.9 bring-up run on 2026-09-13:
+a night elf hunter in Shadowglen, Teldrassil, taking quest 456 "The Balance
+of Nature" and quest 458 "The Woodland Protector".
 
 ## Confirmed findings
 
@@ -27,6 +28,8 @@ Settled on Classic Era. Re-verify each against Forever when that client exists.
 | Required API coverage | 19 of 19 resolved on build 69722 |
 | QUEST_TURNED_IN payload | carries id, xp and money only, no title; join on quest id |
 | Quest text personalization | the client substitutes the player name into quest and completion text |
+| Single-quest NPCs skip gossip | a quest giver with one available quest opens QUEST_DETAIL directly, with no GOSSIP_SHOW |
+| Decorative signposts | named world objects with a mouseover tooltip are not readable and fire nothing |
 | Session id format in practice | `20260913T155600Z-7f4f` |
 
 The map API mistake is the one worth remembering. A wrapper guarded by
@@ -46,7 +49,7 @@ when the data looks thin.
 | Addon appears in the character-select addon list | yes |
 | Addon prints its load message on login | yes |
 | `/ac status` prints a session id | yes |
-| `/reload` persists events to disk | yes, 8 events across sessions |
+| `/reload` persists events to disk | yes, 11 events across sessions |
 
 An empty `events` table on disk alongside a non-zero `/ac status` count does not
 mean capture failed. WoW writes SavedVariables only on reload, logout,
@@ -88,12 +91,12 @@ NPC. V0 keeps both. Collapsing them is companion-side work, not addon work.
 | GOSSIP_SHOW fires | yes |
 | Gossip text available | yes |
 | Which API returned it | `C_GossipInfo`, confirmed by the returned table shape |
-| Gossip options available | empty for this NPC, needs one with dialogue options |
+| Gossip options available | empty on all four captures so far; see note below |
 | Option shape (table of objects, or flat pairs) | not yet observed |
 | Active quests list available | yes, structured |
-| Available quests list available | empty for this NPC, needs a quest giver with an unaccepted quest |
+| Available quests list available | empty on all four captures so far; see note below |
 | Reopening the same NPC within 30s is deduplicated | not yet exercised |
-| ITEM_TEXT_READY fires on a readable book | not yet exercised |
+| ITEM_TEXT_READY fires on a readable book | deferred; the tested signpost was decorative and fired nothing, not even ITEM_TEXT_BEGIN |
 | Book text available (`ItemTextGetText`) | not yet exercised |
 | Book title available (`ItemTextGetItem`) | not yet exercised |
 | Page number available (`ItemTextGetPage`) | not yet exercised |
@@ -103,8 +106,19 @@ NPC. V0 keeps both. Collapsing them is companion-side work, not addon work.
 | Speaker name available | deferred, capture stays live |
 | Speaker GUID present at argument position 12 | deferred, capture stays live |
 
-Readable objects worth testing near Shadowglen: the training dummies area signs,
-and quest letters. Further afield, the bookshelves in Stormwind Keep's library.
+On the empty gossip options and available quests: this is very likely correct
+behavior rather than a capture gap. A quest giver holding a single unaccepted
+quest opens the quest frame directly, so GOSSIP_SHOW never fires and there is
+nothing for the addon to read. Quest 458 from Melithar Staghelm went straight
+to QUEST_DETAIL with no gossip event at all. To populate these fields, the NPC
+has to offer a real choice: several quests at once, or a quest alongside
+another service such as a vendor, trainer, or flight master.
+
+On readable objects: a named world object with a mouseover tooltip, like the
+Starbreeze Village signpost, is decorative. It fires nothing at all, not even
+ITEM_TEXT_BEGIN. Genuine readables are sparse in the night elf starting zones.
+Quest letters and scrolls in inventory are the most reliable candidates, and
+failing those, the bookshelves in larger cities.
 
 ## Location
 
@@ -123,7 +137,7 @@ and quest letters. Further afield, the bookshelves in Stormwind Keep's library.
 - [x] Milestone 1: quest 456 produced an event with id, quest id, title, full quest text, objectives, NPC name and GUID, timestamp, zone, and session metadata.
 - [x] Milestone 2: quest 456 produced all five lifecycle events, including completion text and the XP and money rewards.
 - [x] Milestone 3a: gossip captured, with NPC identity and structured active quests.
-- [ ] Milestone 3b: readable book or sign captured.
+- [ ] Milestone 3b: readable book or sign captured. Deferred; readable objects are sparse in the night elf starting zones.
 - [ ] Milestone 3c: world dialogue captured. Deferred by choice, not blocked.
 
 Milestone 3c is deferred rather than dropped. Capture stays registered for
