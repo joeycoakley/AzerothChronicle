@@ -98,10 +98,10 @@ NPC. V0 keeps both. Collapsing them is companion-side work, not addon work.
 | Book title available (`ItemTextGetItem`) | not yet exercised |
 | Page number available (`ItemTextGetPage`) | not yet exercised |
 | Turning a page produces a second event with the next page number | not yet exercised |
-| CHAT_MSG_MONSTER_SAY fires | not yet exercised |
-| CHAT_MSG_MONSTER_YELL fires | not yet exercised |
-| Speaker name available | not yet exercised |
-| Speaker GUID present at argument position 12 | not yet exercised |
+| CHAT_MSG_MONSTER_SAY fires | deferred, capture stays live |
+| CHAT_MSG_MONSTER_YELL fires | deferred, capture stays live |
+| Speaker name available | deferred, capture stays live |
+| Speaker GUID present at argument position 12 | deferred, capture stays live |
 
 Readable objects worth testing near Shadowglen: the training dummies area signs,
 and quest letters. Further afield, the bookshelves in Stormwind Keep's library.
@@ -122,11 +122,20 @@ and quest letters. Further afield, the bookshelves in Stormwind Keep's library.
 - [x] Milestone 0: addon loads, SavedVariables initializes, `/ac status` works.
 - [x] Milestone 1: quest 456 produced an event with id, quest id, title, full quest text, objectives, NPC name and GUID, timestamp, zone, and session metadata.
 - [x] Milestone 2: quest 456 produced all five lifecycle events, including completion text and the XP and money rewards.
-- [ ] Milestone 3: gossip captured. Readable book and world dialogue still needed.
+- [x] Milestone 3a: gossip captured, with NPC identity and structured active quests.
+- [ ] Milestone 3b: readable book or sign captured.
+- [ ] Milestone 3c: world dialogue captured. Deferred by choice, not blocked.
+
+Milestone 3c is deferred rather than dropped. Capture stays registered for
+all four monster chat events, so a say or yell will be recorded passively
+whenever one happens near the player. No hunting required; the box gets
+ticked when the data shows up. Schema v1 can be frozen without it, since
+the dialogue event shape is the simplest of the four capture paths and
+carries no fields the other paths have not already exercised.
 
 ## Next session
 
-1. Read a book or sign, and catch an NPC say or yell, to close out Milestone 3.
+1. Read a book or sign, to close out Milestone 3b.
 2. Talk to a quest giver with an unaccepted quest, so gossip options and
    available quests come back populated rather than empty.
 3. Step indoors and check whether coordinates go nil, since the companion
