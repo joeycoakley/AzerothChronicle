@@ -194,6 +194,34 @@ class TestZoneDiscovery(ForeverCaptureTestCase):
         self.assertEqual(len(rows), 1, 'rematerializing must not duplicate zones')
 
 
+class TestLevelUp(ForeverCaptureTestCase):
+    def test_level_up_keeps_the_level_and_the_place(self):
+        # Where you leveled is the interesting half. It comes free because
+        # every event records position.
+        self.ingest([
+            event('e1', 'PLAYER_LEVEL_UP', 100, progression={'level': 12, 'rawArgs': [42, 7]}),
+        ])
+        row = self.conn.execute(
+            "SELECT zone, timestamp, raw_payload_json FROM events"
+            " WHERE event_type = 'PLAYER_LEVEL_UP'").fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row['zone'], 'Mount Hyjal')
+
+        import json
+        self.assertEqual(json.loads(row['raw_payload_json'])['progression']['level'], 12)
+
+    def test_level_ups_are_queryable_in_order(self):
+        self.ingest([
+            event('e1', 'PLAYER_LEVEL_UP', 100, progression={'level': 2}),
+            event('e2', 'PLAYER_LEVEL_UP', 300, progression={'level': 4}),
+            event('e3', 'PLAYER_LEVEL_UP', 200, progression={'level': 3}),
+        ])
+        rows = self.conn.execute(
+            "SELECT timestamp FROM events WHERE event_type = 'PLAYER_LEVEL_UP'"
+            " ORDER BY timestamp").fetchall()
+        self.assertEqual([r['timestamp'] for r in rows], [100, 200, 300])
+
+
 class TestStillIdempotent(ForeverCaptureTestCase):
     def test_new_event_types_do_not_break_repeat_import(self):
         events = [

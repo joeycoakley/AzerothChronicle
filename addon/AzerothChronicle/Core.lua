@@ -838,6 +838,31 @@ local function CaptureZoneDiscovery()
     })
 end
 
+-- Where and when you leveled is a genuine marker in a journey, and the zone
+-- comes free because every event records position.
+--
+-- Only the level itself is interpreted. The arguments after it differ by
+-- client branch (vanilla reports stat gains, later branches report talent
+-- counts), so the rest is kept raw rather than decoded against a guess.
+--
+-- The level here is authoritative over the one on the event's character
+-- block: at the moment this fires, the unit may still report the old level.
+local function CaptureLevelUp(newLevel, ...)
+    local extraArgs = {}
+    for index = 1, select("#", ...) do
+        extraArgs[index] = select(index, ...)
+    end
+
+    AC.Debug.Discover("PLAYER_LEVEL_UP", { level = newLevel, extraArgCount = #extraArgs })
+
+    AppendEvent("PLAYER_LEVEL_UP", {
+        progression = {
+            level = newLevel,
+            rawArgs = extraArgs,
+        },
+    })
+end
+
 local questLogSnapshotTaken = false
 
 -- Records what was already in the quest log when the addon loaded, once per
@@ -972,6 +997,7 @@ local function RegisterCaptureEvents()
     end
 
     tryRegister("GOSSIP_SHOW")
+    tryRegister("PLAYER_LEVEL_UP")
     tryRegister("ITEM_TEXT_READY")
     -- Diagnostic companion to ITEM_TEXT_READY. Registering the frame-open
     -- event too is what distinguishes "this object is not readable at all"
@@ -1038,6 +1064,8 @@ frame:SetScript("OnEvent", function(_, event, ...)
         SafeCall("QUEST_LOG_UPDATE", CaptureQuestLogSnapshot)
     elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" then
         SafeCall(event, CaptureZoneDiscovery)
+    elseif event == "PLAYER_LEVEL_UP" then
+        SafeCall("PLAYER_LEVEL_UP", CaptureLevelUp, ...)
     elseif event == "GOSSIP_SHOW" then
         SafeCall("GOSSIP_SHOW", CaptureGossip)
     elseif event == "ITEM_TEXT_BEGIN" then
@@ -1112,6 +1140,7 @@ local function PrintStats()
     AC.Debug.Print("Gossip entries: " .. (counts["GOSSIP_SHOW"] or 0))
     AC.Debug.Print("Item/book text entries: " .. (counts["ITEM_TEXT_READY"] or 0))
     AC.Debug.Print("Zones discovered: " .. (counts["ZONE_DISCOVERED"] or 0))
+    AC.Debug.Print("Level ups: " .. (counts["PLAYER_LEVEL_UP"] or 0))
     AC.Debug.Print("Quest log snapshots: " .. (counts["QUEST_LOG_SNAPSHOT"] or 0))
 
     local dialogueCount = 0

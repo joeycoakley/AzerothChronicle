@@ -41,6 +41,7 @@ Added ahead of the beta and not yet seen firing. Each has a known trigger.
 | QUEST_LOG_SNAPSHOT | Log in with at least one quest already in the log |
 | ZONE_DISCOVERED | Walk into a zone for the first time |
 | Race and faction | Check `/ac status` on a Skyborne character |
+| PLAYER_LEVEL_UP | Gain a level anywhere |
 
 The quest greeting path is the one most likely to matter immediately. With a
 thousand new quests, NPCs offering several at once will be common, and until
