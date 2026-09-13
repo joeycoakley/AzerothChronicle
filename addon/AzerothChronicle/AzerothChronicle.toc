@@ -2,7 +2,9 @@
 ## Title: Azeroth Chronicle
 ## Notes: Your personal record of the stories you discover in Azeroth.
 ## Author: Joey
-## Version: 0.0.1
+## Version: 0.1.0
 ## SavedVariablesPerCharacter: AzerothChronicleDB
 
 Core.lua
+Index.lua
+UI\Journal.lua

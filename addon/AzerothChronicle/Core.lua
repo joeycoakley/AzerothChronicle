@@ -584,6 +584,12 @@ local function AppendEvent(eventType, fields)
     db.events[#db.events + 1] = event
     AC.Debug.Log(eventType, "captured. id:", eventId)
 
+    -- The journal rebuilds itself from the event count, so an open pane
+    -- reflects what just happened rather than what was true when it opened.
+    if AC.Index and AC.Index.Invalidate then
+        AC.Index.Invalidate()
+    end
+
     return event
 end
 
@@ -1227,7 +1233,13 @@ SlashCmdList["AZEROTHCHRONICLE"] = function(msg)
     msg = (msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
     local command, arg = msg:match("^(%S*)%s*(.-)$")
 
-    if command == "" or command == "status" then
+    if command == "" or command == "journal" then
+        if AC.Journal and AC.Journal.Toggle then
+            AC.Journal.Toggle(arg ~= "" and arg or nil)
+        else
+            AC.Debug.Print("The journal UI did not load.")
+        end
+    elseif command == "status" then
         PrintStatus()
     elseif command == "stats" then
         PrintStats()
@@ -1260,6 +1272,6 @@ SlashCmdList["AZEROTHCHRONICLE"] = function(msg)
             AC.Debug.Print("Usage: /ac discovery on|off")
         end
     else
-        AC.Debug.Print("Commands: /ac status, /ac stats, /ac last, /ac apis, /ac debug on|off, /ac discovery on|off")
+        AC.Debug.Print("Commands: /ac journal, /ac status, /ac stats, /ac last, /ac apis, /ac debug on|off, /ac discovery on|off")
     end
 end

@@ -73,9 +73,23 @@ WoW only writes this file on `/reload`, logout, disconnect, or exit. Nothing
 appears on disk mid-session, which is expected and is why the companion imports
 at session boundaries rather than streaming.
 
+## The journal pane
+
+`/ac` opens it. Four views: Journey, Quests, Characters, Places. Everything in
+it is computed in memory from the events already captured, so it includes the
+session in progress, needs no reload, and works with no network and no
+language model.
+
+Two rules the pane holds to. Captured text is never replaced by a paraphrase,
+because the wording is what you slowed down to read; lists are navigation and
+the original is always one click away. And character relevance shows its
+evidence rather than a score, so "gave you two quests, met in Shadowglen" is
+something you can check.
+
 ## In-game commands
 
 ```text
+/ac                   open the journal pane
 /ac status            character, session, event counts
 /ac stats             counts broken out by capture type
 /ac last              the most recently recorded event
