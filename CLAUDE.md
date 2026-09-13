@@ -103,6 +103,18 @@ cost a debugging round.
 - **Never commit an unsanitized capture.** Use
   `tools/sanitize-savedvariables.py`, which refuses to write if identity
   survives. No character names, realms, GUIDs or account ids in the repo.
+- **The recap model is `claude-sonnet-5`, deliberately, in `llm.py`.** A recap is
+  prose over a small, already-structured context (see `context.py`), not
+  multi-step reasoning, so it doesn't need Opus's headroom, and Sonnet costs
+  under half as much per token. Don't "upgrade" this to Opus by default; if a
+  future feature genuinely needs more reasoning, decide per-feature, not by
+  bumping the whole file.
+- **No server-side refusal fallback is wired.** The documented `fallbacks:
+  "default"` form is only demonstrated with `claude-opus-5` as the requesting
+  model, and recap content (fantasy quest text) carries essentially no
+  policy-refusal risk, so it isn't worth wiring against an unconfirmed model
+  pairing. A refusal, if it ever happens, surfaces as `LlmRefused` instead of
+  being silently retried.
 
 ## Commands
 

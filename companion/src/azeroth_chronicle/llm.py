@@ -13,7 +13,10 @@ knowledge of Warcraft. For a player discovering a new game's story slowly,
 an invented detail is worse than no summary at all.
 """
 
-MODEL = 'claude-opus-5'
+# Sonnet rather than Opus: a recap is prose over a small, already-structured
+# context (see context.py), not multi-step reasoning, so it doesn't need
+# Opus's extra headroom, and Sonnet 5 costs under half as much per token.
+MODEL = 'claude-sonnet-5'
 
 # Recaps are short by design, so this cap is deliberate rather than careless.
 MAX_TOKENS = 2000
@@ -49,7 +52,7 @@ class LlmUnavailable(Exception):
 
 
 class LlmRefused(Exception):
-    """The model declined to answer, including after any fallback."""
+    """The model declined to answer this request."""
 
 
 def _client():
@@ -74,19 +77,20 @@ def _client():
 def summarize(context_text, system_prompt=None, model=MODEL, max_tokens=MAX_TOKENS):
     """Send one context to the model and return the recap text.
 
-    Server-side fallbacks are enabled: if the model declines the request on
-    policy grounds, the API retries it on a fallback model within the same
-    call rather than simply returning nothing.
+    No server-side fallback here: the documented "default" form is only
+    demonstrated with claude-opus-5 as the requesting model, and recap
+    content (fantasy quest text) carries essentially no policy-refusal risk
+    in the first place, so the beta parameter isn't worth wiring against an
+    unconfirmed model pairing. A refusal, if it ever happens, is surfaced
+    below rather than silently retried.
     """
     client = _client()
 
     try:
-        response = client.beta.messages.create(
+        response = client.messages.create(
             model=model,
             max_tokens=max_tokens,
             system=system_prompt or SYSTEM_PROMPT,
-            betas=['server-side-fallback-2026-07-01'],
-            fallbacks='default',
             messages=[{
                 'role': 'user',
                 'content': 'Recap this stretch of play.\n\n' + context_text,
