@@ -24,6 +24,7 @@ local ADDON_NAME = ...
 AC = AC or {}
 AC.API = {}
 AC.Debug = {}
+AC.state = { unregisteredEvents = {} }
 
 local SCHEMA_VERSION = 1
 local ADDON_VERSION = "0.0.1"
@@ -707,15 +708,42 @@ local DIALOGUE_EVENTS = {
     "CHAT_MSG_MONSTER_WHISPER",
 }
 
+-- Register each event under its own guard.
+--
+-- RegisterEvent throws on an event name the client does not know. A single
+-- loop would then abort partway through and silently skip every event
+-- after the bad one, so an unrecognized QUEST_TURNED_IN on some future
+-- client would also cost all the world dialogue events that follow it in
+-- the list. Failures are collected and surfaced instead of ending capture.
 local function RegisterCaptureEvents()
-    frame:RegisterEvent("GOSSIP_SHOW")
-    frame:RegisterEvent("ITEM_TEXT_READY")
+    local failed = {}
+
+    local function tryRegister(evt)
+        local ok = pcall(frame.RegisterEvent, frame, evt)
+        if not ok then
+            failed[#failed + 1] = evt
+            AC.Debug.Error("RegisterEvent", "client rejected event " .. tostring(evt))
+        end
+    end
+
+    tryRegister("GOSSIP_SHOW")
+    tryRegister("ITEM_TEXT_READY")
     for _, evt in ipairs(QUEST_EVENTS) do
-        frame:RegisterEvent(evt)
+        tryRegister(evt)
     end
     for _, evt in ipairs(DIALOGUE_EVENTS) do
-        frame:RegisterEvent(evt)
+        tryRegister(evt)
     end
+
+    -- Record on the session so a later import can tell "this client never
+    -- fired that event" apart from "the player never did that thing".
+    local session = AzerothChronicleDB.sessions and AzerothChronicleDB.sessions[sessionId]
+    if session and #failed > 0 then
+        session.unregisteredEvents = failed
+    end
+
+    AC.state.unregisteredEvents = failed
+    return failed
 end
 
 local function OnAddonLoaded(loadedAddonName)
@@ -839,6 +867,16 @@ local function PrintApis()
         for _, name in ipairs(fallbacksPresent) do
             AC.Debug.Print("|cff999999  available: " .. name .. "|r")
         end
+    end
+
+    local unregistered = AC.state.unregisteredEvents or {}
+    if #unregistered > 0 then
+        AC.Debug.Print("|cffff5555events the client rejected|r:")
+        for _, evt in ipairs(unregistered) do
+            AC.Debug.Print("  " .. evt)
+        end
+    else
+        AC.Debug.Print("all capture events registered.")
     end
 
     -- Show what location capture actually produces right now, since a
