@@ -4,11 +4,15 @@ A personal, spoiler-safe lore journal for World of Warcraft. An addon records th
 quests, NPCs, dialogue, books, and world events you actually encounter, and a
 local companion turns that raw history into recaps and answers.
 
-The full design lives in [docs/development-spec.md](docs/development-spec.md).
+The full design lives in [docs/development-spec.md](docs/development-spec.md), and
+[CLAUDE.md](CLAUDE.md) is the contribution guide: the conventions, the invariants,
+and the traps that have already cost a debugging round. Read it before changing
+anything. Claude Code loads it automatically.
 
-**Current status: capture validated, importer working.** The addon captures a
-full quest lifecycle on Classic Era 1.15.9, and the companion imports it into
-SQLite. Milestones 0 through 4 pass. No language model yet, which is Milestone 5.
+**Current status: capture validated, journal and recaps working.** The addon
+captures a full quest lifecycle on Classic Era 1.15.9 and shows it in an in-game
+pane. The companion imports it into SQLite and can summarize a stretch of play.
+All six milestones pass. Next is the WoW Forever beta on 2026-09-17.
 
 ## Repository layout
 
