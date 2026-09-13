@@ -23,7 +23,7 @@ SAVED_VARIABLE_NAME = 'AzerothChronicleDB'
 
 QUEST_EVENTS = {
     'QUEST_DETAIL', 'QUEST_ACCEPTED', 'QUEST_PROGRESS',
-    'QUEST_COMPLETE', 'QUEST_TURNED_IN',
+    'QUEST_COMPLETE', 'QUEST_TURNED_IN', 'QUEST_REMOVED',
 }
 
 DIALOGUE_EVENTS = {
@@ -162,16 +162,22 @@ def _upsert_character(conn, character):
     if not guid:
         return
     conn.execute(
-        'INSERT INTO characters (character_id, name, realm, class, level_last_seen, first_seen_at)'
-        ' VALUES (?,?,?,?,?,?)'
+        'INSERT INTO characters ('
+        ' character_id, name, realm, class, race, faction, level_last_seen, first_seen_at'
+        ') VALUES (?,?,?,?,?,?,?,?)'
         ' ON CONFLICT(character_id) DO UPDATE SET'
         '   name = excluded.name,'
         '   realm = excluded.realm,'
         '   class = excluded.class,'
+        # An older capture predating race and faction carries NULL for them.
+        # COALESCE keeps what is already known instead of erasing it.
+        '   race = COALESCE(excluded.race, characters.race),'
+        '   faction = COALESCE(excluded.faction, characters.faction),'
         # Level only ever moves up, and an older file must not walk it back.
         '   level_last_seen = MAX(COALESCE(characters.level_last_seen, 0),'
         '                         COALESCE(excluded.level_last_seen, 0))',
         (guid, character.get('name'), character.get('realm'), character.get('class'),
+         character.get('race'), character.get('faction'),
          _as_int(character.get('level')), int(time.time())))
 
 
@@ -222,8 +228,16 @@ def materialize(conn):
 
         if event_type in QUEST_EVENTS:
             _accumulate_quest(quests, row, payload, event_type, npc_key)
+        elif event_type == 'QUEST_LOG_SNAPSHOT':
+            _accumulate_snapshot(quests, row, payload)
 
-        if event_type == 'QUEST_PROGRESS':
+        if event_type == 'QUEST_GREETING':
+            greeting = payload.get('greeting') or {}
+            _record_dialogue(conn, row, npc_key, None,
+                             'quest_greeting', greeting.get('text'))
+        elif event_type == 'ZONE_DISCOVERED':
+            _record_zone(conn, row, payload.get('discovery') or {})
+        elif event_type == 'QUEST_PROGRESS':
             quest = payload.get('quest') or {}
             _record_dialogue(conn, row, npc_key, _as_int(quest.get('id')),
                              'quest_progress', quest.get('progressText'))
@@ -320,19 +334,91 @@ def _accumulate_quest(quests, row, payload, event_type, npc_key):
         keep_earliest('turned_in_at', timestamp)
         keep_if_present('xp_reward', _as_int(quest.get('xpReward')))
         keep_if_present('money_reward', _as_int(quest.get('moneyReward')))
+    elif event_type == 'QUEST_REMOVED':
+        # Recorded as a plain removal here. Whether it was an abandonment
+        # cannot be decided from this event alone, because the client fires
+        # the same one on turn-in, so the judgment waits until every event
+        # for this quest has been seen.
+        keep_earliest('removed_at', timestamp)
+
+
+def _accumulate_snapshot(quests, row, payload):
+    """Seed quests that were already in the log when the addon first looked.
+
+    These carry a title and nothing else: no description, no giver, no
+    accepted time, because none of it was ever observed. They are flagged so
+    a recap can say the character is carrying the quest without inventing
+    the story of how they got it.
+    """
+    entries = (payload.get('questLog') or {}).get('entries') or []
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        quest_id = _as_int(entry.get('questId'))
+        if quest_id is None:
+            continue
+
+        fields = quests.setdefault((row['character_id'], quest_id), {})
+        if entry.get('title') and not fields.get('title'):
+            fields['title'] = entry['title']
+        if fields.get('first_seen_at') is None:
+            fields['first_seen_at'] = row['timestamp']
+        # Only a quest never seen being accepted is really "known only from
+        # a snapshot". If an accept was observed anywhere, that wins.
+        fields.setdefault('known_from_snapshot', 1)
+
+
+def _record_zone(conn, row, discovery):
+    zone = discovery.get('zone')
+    if not zone:
+        return
+    conn.execute(
+        'INSERT OR REPLACE INTO zones ('
+        ' zone, character_id, map_id, subzone, discovered_at, event_id'
+        ') VALUES (?,?,?,?,?,?)',
+        (zone, row['character_id'], _as_int(discovery.get('mapId')),
+         discovery.get('subZone'), row['timestamp'], row['event_id']))
+
+
+def _resolve_abandonment(fields):
+    """Decide whether a removal was an abandonment.
+
+    The client fires one event for both abandoning a quest and handing it
+    in, so the event alone cannot say which happened. A turn-in for the same
+    quest is decisive evidence that the removal was a completion. With no
+    turn-in anywhere in the history, the quest left the log unfinished, and
+    that is what abandonment means.
+
+    Left NULL when the evidence is ambiguous rather than guessed, because a
+    quest wrongly marked abandoned disappears from the player's open threads.
+    """
+    removed_at = fields.get('removed_at')
+    if removed_at is None:
+        return None
+    if fields.get('turned_in_at') is not None:
+        return None
+    return removed_at
 
 
 def _write_quest(conn, character_id, quest_id, fields):
+    # A quest observed being accepted was never "known only from a snapshot",
+    # whatever order the events arrived in.
+    known_from_snapshot = 1 if (fields.get('known_from_snapshot')
+                                and fields.get('accepted_at') is None) else 0
+
     conn.execute(
         'INSERT OR REPLACE INTO quests ('
         ' character_id, quest_id, title, first_seen_at, accepted_at, completed_at,'
         ' turned_in_at, giver_npc_key, description, objectives_text, completion_text,'
-        ' xp_reward, money_reward) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ' xp_reward, money_reward, abandoned_at, known_from_snapshot'
+        ') VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (character_id, quest_id, fields.get('title'), fields.get('first_seen_at'),
          fields.get('accepted_at'), fields.get('completed_at'), fields.get('turned_in_at'),
          fields.get('giver_npc_key'), fields.get('description'),
          fields.get('objectives_text'), fields.get('completion_text'),
-         fields.get('xp_reward'), fields.get('money_reward')))
+         fields.get('xp_reward'), fields.get('money_reward'),
+         _resolve_abandonment(fields), known_from_snapshot))
 
 
 # -- entry point ---------------------------------------------------------

@@ -16,7 +16,7 @@ DEFAULT_DB_NAME = 'chronicle.sqlite3'
 # Derived tables, in the order they are safe to clear. These hold nothing
 # that cannot be recomputed from the events table, which is what makes
 # rebuilding cheap and repeat imports harmless.
-DERIVED_TABLES = ('dialogue', 'item_text', 'quests', 'npcs')
+DERIVED_TABLES = ('dialogue', 'item_text', 'quests', 'npcs', 'zones')
 
 
 def default_db_path():

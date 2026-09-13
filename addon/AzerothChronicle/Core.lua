@@ -124,11 +124,25 @@ local function GetCharacterIdentity()
     local guid = UnitGUID("player") or ("Unknown-" .. name)
     local _, classToken = UnitClass("player")
     local level = UnitLevel("player") or 0
+
+    -- Race and faction are narratively load-bearing, not cosmetic: faction
+    -- decides which version of a quest's text the player is even shown, and
+    -- a journal about a character's story that cannot say who they are is
+    -- missing the subject. Tokens are stored raw rather than matched against
+    -- a known list, so a race this code has never heard of records correctly.
+    local raceToken, factionToken
+    local okRace, _, rToken = pcall(UnitRace, "player")
+    if okRace then raceToken = rToken end
+    local okFaction, fToken = pcall(UnitFactionGroup, "player")
+    if okFaction then factionToken = fToken end
+
     return {
         guid = guid,
         name = name,
         realm = realm,
         class = classToken,
+        race = raceToken,
+        faction = factionToken,
         level = level,
     }
 end
@@ -257,6 +271,90 @@ function AC.API.GetQuestRewardText()
     return nil
 end
 
+-- An NPC offering more than one quest does not open the gossip frame. It
+-- fires QUEST_GREETING with its own greeting text and separate lists of
+-- available and active quests. Without these, every multi-quest giver is
+-- captured as silence.
+function AC.API.GetQuestGreetingText()
+    if GetGreetingText then
+        local ok, text = pcall(GetGreetingText)
+        if ok then return text end
+    end
+    return nil
+end
+
+local function collectGreetingTitles(countFn, titleFn)
+    if not (countFn and titleFn) then return nil end
+
+    local ok, count = pcall(countFn)
+    if not ok or not count then return nil end
+
+    local titles = {}
+    for index = 1, count do
+        local okTitle, title = pcall(titleFn, index)
+        if okTitle and title then
+            titles[#titles + 1] = { title = title }
+        end
+    end
+    return titles
+end
+
+function AC.API.GetGreetingAvailableQuests()
+    return collectGreetingTitles(GetNumAvailableQuests, GetAvailableTitle)
+end
+
+function AC.API.GetGreetingActiveQuests()
+    return collectGreetingTitles(GetNumActiveQuests, GetActiveTitle)
+end
+
+-- Quests already in the log when the addon loads are otherwise invisible
+-- until the player happens to interact with them again. That is the normal
+-- case for anyone installing mid-playthrough, or on a copied beta character.
+function AC.API.GetQuestLogEntries()
+    if C_QuestLog and C_QuestLog.GetNumQuestLogEntries and C_QuestLog.GetInfo then
+        local ok, count = pcall(C_QuestLog.GetNumQuestLogEntries)
+        if ok and count then
+            local entries = {}
+            for index = 1, count do
+                local okInfo, info = pcall(C_QuestLog.GetInfo, index)
+                if okInfo and info and not info.isHeader then
+                    entries[#entries + 1] = {
+                        questId = info.questID,
+                        title = info.title,
+                        level = info.level,
+                        isComplete = info.isComplete and true or false,
+                    }
+                end
+            end
+            return entries
+        end
+    end
+
+    if GetNumQuestLogEntries and GetQuestLogTitle then
+        local ok, count = pcall(GetNumQuestLogEntries)
+        if ok and count then
+            local entries = {}
+            for index = 1, count do
+                -- title, level, suggestedGroup, isHeader, isCollapsed,
+                -- isComplete, frequency, questID
+                local okTitle, title, level, _, isHeader, _, isComplete, _, questId =
+                    pcall(GetQuestLogTitle, index)
+                if okTitle and title and not isHeader then
+                    entries[#entries + 1] = {
+                        questId = questId,
+                        title = title,
+                        level = level,
+                        isComplete = (isComplete == 1) or (isComplete == true),
+                    }
+                end
+            end
+            return entries
+        end
+    end
+
+    return nil
+end
+
 function AC.API.GetUnitIdentity(unit)
     local name, guid
     local ok1, n = pcall(UnitName, unit)
@@ -338,10 +436,18 @@ local API_PROBES = {
     { "GetObjectiveText", function() return GetObjectiveText end, "required" },
     { "GetProgressText", function() return GetProgressText end, "required" },
     { "GetRewardText", function() return GetRewardText end, "required" },
+    { "GetGreetingText", function() return GetGreetingText end, "required" },
+    { "GetNumAvailableQuests", function() return GetNumAvailableQuests end, "required" },
+    { "GetAvailableTitle", function() return GetAvailableTitle end, "required" },
+    { "GetNumActiveQuests", function() return GetNumActiveQuests end, "required" },
+    { "GetActiveTitle", function() return GetActiveTitle end, "required" },
+    { "UnitRace", function() return UnitRace end, "required" },
+    { "UnitFactionGroup", function() return UnitFactionGroup end, "required" },
     { "ItemTextGetText", function() return ItemTextGetText end, "required" },
     { "ItemTextGetItem", function() return ItemTextGetItem end, "required" },
     { "ItemTextGetPage", function() return ItemTextGetPage end, "required" },
     { "ItemTextGetCreator", function() return ItemTextGetCreator end, "required" },
+    { "C_QuestLog.GetInfo", function() return C_QuestLog and C_QuestLog.GetInfo end, "required" },
     { "C_Map.GetBestMapForUnit", function() return C_Map and C_Map.GetBestMapForUnit end, "required" },
     { "C_Map.GetPlayerMapPosition", function() return C_Map and C_Map.GetPlayerMapPosition end, "required" },
     { "GetZoneText", function() return GetZoneText end, "required" },
@@ -353,6 +459,7 @@ local API_PROBES = {
     { "GetGossipActiveQuests", function() return GetGossipActiveQuests end, "fallback" },
     { "GetGossipAvailableQuests", function() return GetGossipAvailableQuests end, "fallback" },
     { "GetPlayerMapPosition", function() return GetPlayerMapPosition end, "fallback" },
+    { "GetQuestLogTitle", function() return GetQuestLogTitle end, "fallback" },
     { "C_Map.GetBestMapID", function() return C_Map and C_Map.GetBestMapID end, "fallback" },
 }
 
@@ -587,8 +694,24 @@ end
 -- Gossip capture (spec section 8)
 -- ============================================================
 
-local lastGossipByKey = {}
-local GOSSIP_DEDUPE_WINDOW_SECONDS = 30
+local recentContentByKey = {}
+local REPEAT_WINDOW_SECONDS = 30
+
+-- Shared by gossip and quest greetings, which have the same problem: closing
+-- and reopening an NPC window replays identical text. Scoped by event kind so
+-- a greeting cannot suppress a gossip capture from the same NPC.
+local function IsImmediateRepeat(scope, key, contentHash)
+    local mapKey = scope .. '|' .. (key or 'unknown')
+    local now = time()
+    local last = recentContentByKey[mapKey]
+
+    if last and last.hash == contentHash and (now - last.at) < REPEAT_WINDOW_SECONDS then
+        return true
+    end
+
+    recentContentByKey[mapKey] = { hash = contentHash, at = now }
+    return false
+end
 
 local function CaptureGossip()
     local db = AzerothChronicleDB
@@ -599,13 +722,10 @@ local function CaptureGossip()
     local key = npcGUID or npcName or "unknown"
 
     local contentHash = HashString((text or "") .. "|" .. key)
-    local now = time()
-    local last = lastGossipByKey[key]
-    if last and last.hash == contentHash and (now - last.at) < GOSSIP_DEDUPE_WINDOW_SECONDS then
+    if IsImmediateRepeat("gossip", key, contentHash) then
         AC.Debug.Log("GOSSIP_SHOW deduped for", npcName)
         return
     end
-    lastGossipByKey[key] = { hash = contentHash, at = now }
 
     local options = AC.API.GetGossipOptions()
     local activeQuests = AC.API.GetGossipActiveQuests()
@@ -626,6 +746,120 @@ local function CaptureGossip()
             activeQuests = activeQuests,
             availableQuests = availableQuests,
         },
+    })
+end
+
+-- ============================================================
+-- Quest greeting capture
+--
+-- The third quest-giver path, alongside gossip and a direct quest detail.
+-- An NPC with several quests shows a greeting frame instead, which carries
+-- its own narrative text that no other event exposes.
+-- ============================================================
+
+local function CaptureQuestGreeting()
+    local greetingText = AC.API.GetQuestGreetingText()
+    local available = AC.API.GetGreetingAvailableQuests()
+    local active = AC.API.GetGreetingActiveQuests()
+
+    local npcName, npcGUID = AC.API.GetUnitIdentity("questnpc")
+    if not npcName then
+        npcName, npcGUID = AC.API.GetUnitIdentity("npc")
+    end
+    lastQuestGiverName, lastQuestGiverGUID = npcName, npcGUID
+
+    local key = npcGUID or npcName or "unknown"
+    local contentHash = HashString((greetingText or "") .. "|" .. key)
+    if IsImmediateRepeat("greeting", key, contentHash) then
+        AC.Debug.Log("QUEST_GREETING deduped for", npcName)
+        return
+    end
+
+    AC.Debug.Discover("QUEST_GREETING", {
+        npcName = npcName,
+        hasText = greetingText ~= nil,
+        availableCount = available and #available or 0,
+        activeCount = active and #active or 0,
+    })
+
+    AppendEvent("QUEST_GREETING", {
+        source = { name = npcName, guid = npcGUID },
+        greeting = {
+            text = greetingText,
+            contentHash = contentHash,
+            availableQuests = available,
+            activeQuests = active,
+        },
+    })
+end
+
+-- ============================================================
+-- Quest removal, zone discovery, quest log snapshot
+-- ============================================================
+
+-- Fires both when a quest is abandoned and when one leaves the log after
+-- being turned in, and the event does not say which. Recorded raw with both
+-- arguments so the companion can decide by looking for a turn-in of the same
+-- quest at the same moment. Guessing here would bake an interpretation into
+-- the canonical record, which is exactly what the raw journal must not do.
+local function CaptureQuestRemoved(arg1, arg2)
+    AC.Debug.Discover("QUEST_REMOVED", { arg1 = arg1, arg2 = arg2 })
+
+    AppendEvent("QUEST_REMOVED", {
+        quest = { id = arg1, rawArgs = { arg1, arg2 } },
+    })
+end
+
+-- Only the first arrival in a zone is recorded. Re-entering is constant and
+-- would bury the journal in noise, while arriving somewhere for the first
+-- time is a genuine beat in a journey. Tracked in the saved database rather
+-- than in memory so it stays true across sessions.
+local function CaptureZoneDiscovery()
+    local db = AzerothChronicleDB
+    local location = AC.API.GetLocation()
+    local zone = location.zone
+
+    -- Zone text is briefly empty right after login and during some
+    -- transitions. Recording that would permanently mark a junk zone as seen.
+    if not zone or zone == "" or zone == "Unknown" then return end
+
+    db.zonesSeen = db.zonesSeen or {}
+    if db.zonesSeen[zone] then return end
+    db.zonesSeen[zone] = time()
+
+    AC.Debug.Discover("ZONE_DISCOVERED", { zone = zone, mapId = location.mapId })
+
+    AppendEvent("ZONE_DISCOVERED", {
+        discovery = {
+            zone = zone,
+            subZone = location.subZone,
+            mapId = location.mapId,
+        },
+    })
+end
+
+local questLogSnapshotTaken = false
+
+-- Records what was already in the quest log when the addon loaded, once per
+-- session. Without it, a character copied into a beta realm or a mid
+-- playthrough install shows no in-progress quests at all.
+local function CaptureQuestLogSnapshot()
+    if questLogSnapshotTaken then return end
+
+    local entries = AC.API.GetQuestLogEntries()
+    if not entries then return end
+
+    -- The log reads as empty for a moment after login. Returning without
+    -- setting the flag means the next update tries again, rather than
+    -- recording an empty snapshot and never retrying.
+    if #entries == 0 then return end
+
+    questLogSnapshotTaken = true
+
+    AC.Debug.Discover("QUEST_LOG_SNAPSHOT", { count = #entries })
+
+    AppendEvent("QUEST_LOG_SNAPSHOT", {
+        questLog = { entries = entries, count = #entries },
     })
 end
 
@@ -694,11 +928,22 @@ local frame = CreateFrame("Frame")
 frame:RegisterEvent("ADDON_LOADED")
 
 local QUEST_EVENTS = {
+    "QUEST_GREETING",
     "QUEST_DETAIL",
     "QUEST_ACCEPTED",
     "QUEST_PROGRESS",
     "QUEST_COMPLETE",
     "QUEST_TURNED_IN",
+    "QUEST_REMOVED",
+}
+
+-- Registered for their side effects rather than for their own payloads:
+-- the quest log update drives the one-time snapshot, and the zone and login
+-- events drive first-arrival discovery. Neither is journaled directly.
+local WORLD_EVENTS = {
+    "QUEST_LOG_UPDATE",
+    "ZONE_CHANGED_NEW_AREA",
+    "PLAYER_ENTERING_WORLD",
 }
 
 local DIALOGUE_EVENTS = {
@@ -739,6 +984,9 @@ local function RegisterCaptureEvents()
     for _, evt in ipairs(DIALOGUE_EVENTS) do
         tryRegister(evt)
     end
+    for _, evt in ipairs(WORLD_EVENTS) do
+        tryRegister(evt)
+    end
 
     -- Record on the session so a later import can tell "this client never
     -- fired that event" apart from "the player never did that thing".
@@ -769,6 +1017,8 @@ end
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         SafeCall("ADDON_LOADED", OnAddonLoaded, ...)
+    elseif event == "QUEST_GREETING" then
+        SafeCall("QUEST_GREETING", CaptureQuestGreeting)
     elseif event == "QUEST_DETAIL" then
         SafeCall("QUEST_DETAIL", CaptureQuestDetail)
     elseif event == "QUEST_ACCEPTED" then
@@ -781,6 +1031,13 @@ frame:SetScript("OnEvent", function(_, event, ...)
     elseif event == "QUEST_TURNED_IN" then
         local questId, xpReward, moneyReward = ...
         SafeCall("QUEST_TURNED_IN", CaptureQuestTurnedIn, questId, xpReward, moneyReward)
+    elseif event == "QUEST_REMOVED" then
+        local arg1, arg2 = ...
+        SafeCall("QUEST_REMOVED", CaptureQuestRemoved, arg1, arg2)
+    elseif event == "QUEST_LOG_UPDATE" then
+        SafeCall("QUEST_LOG_UPDATE", CaptureQuestLogSnapshot)
+    elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" then
+        SafeCall(event, CaptureZoneDiscovery)
     elseif event == "GOSSIP_SHOW" then
         SafeCall("GOSSIP_SHOW", CaptureGossip)
     elseif event == "ITEM_TEXT_BEGIN" then
@@ -854,6 +1111,8 @@ local function PrintStats()
 
     AC.Debug.Print("Gossip entries: " .. (counts["GOSSIP_SHOW"] or 0))
     AC.Debug.Print("Item/book text entries: " .. (counts["ITEM_TEXT_READY"] or 0))
+    AC.Debug.Print("Zones discovered: " .. (counts["ZONE_DISCOVERED"] or 0))
+    AC.Debug.Print("Quest log snapshots: " .. (counts["QUEST_LOG_SNAPSHOT"] or 0))
 
     local dialogueCount = 0
     for _, evt in ipairs(DIALOGUE_EVENTS) do

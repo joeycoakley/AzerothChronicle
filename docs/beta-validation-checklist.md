@@ -11,6 +11,41 @@ Status below reflects the Classic Era 1.15.9 bring-up run on 2026-09-13:
 a night elf hunter in Shadowglen, Teldrassil, taking quest 456 "The Balance
 of Nature" and quest 458 "The Woodland Protector".
 
+## Forever beta, day one
+
+Beta opens 2026-09-17; launch is 2026-11-04. Forever is Classic-plus, built
+on vanilla, so the Classic Era findings below are a good prior. Do these
+first, in order, before playing anything you care about recording.
+
+| Step | Why it comes first |
+| --- | --- |
+| Read the new client's build and interface number | The TOC number is for Classic Era and will be wrong |
+| Add the client's flavor folder to companion discovery | The importer cannot find SavedVariables until it knows the folder name |
+| `/ac apis` before anything else | A required API missing here means silent data loss all session |
+| `/ac discovery on` for the whole first session | The only record of how Forever differs |
+| `/ac stats` and `/reload` after ten minutes | Confirms capture and persistence before a long session |
+
+Capture is the only part that cannot be redone later. A pane, a recap, or an
+importer change can all be built against history you already have; a quest
+read while the addon was misconfigured is gone.
+
+### New capture paths, unproven on any client
+
+Added ahead of the beta and not yet seen firing. Each has a known trigger.
+
+| Path | How to trigger it |
+| --- | --- |
+| QUEST_GREETING | Talk to an NPC offering two or more quests at once |
+| QUEST_REMOVED, as abandonment | Accept a quest, then abandon it from the log |
+| QUEST_REMOVED, as completion | Turn a quest in, and confirm it is not marked abandoned |
+| QUEST_LOG_SNAPSHOT | Log in with at least one quest already in the log |
+| ZONE_DISCOVERED | Walk into a zone for the first time |
+| Race and faction | Check `/ac status` on a Skyborne character |
+
+The quest greeting path is the one most likely to matter immediately. With a
+thousand new quests, NPCs offering several at once will be common, and until
+now that entire frame was captured as silence.
+
 ## Confirmed findings
 
 Settled on Classic Era. Re-verify each against Forever when that client exists.
