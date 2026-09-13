@@ -1290,6 +1290,32 @@ local function PrintApis()
         loc.y and string.format("%.3f", loc.y) or "nil"))
 end
 
+-- Reads the stored table directly rather than going through the journal, so
+-- it distinguishes "the thread was never created" from "it exists but the
+-- pane is not showing it". Those look identical from the outside.
+local function PrintThreads()
+    local stored = AzerothChronicleDB and AzerothChronicleDB.threads
+
+    if not stored then
+        AC.Debug.Print("No thread store exists yet.")
+        return
+    end
+
+    local count = 0
+    for _, thread in pairs(stored) do
+        count = count + 1
+        local questCount = 0
+        for _ in pairs(thread.questIds or {}) do questCount = questCount + 1 end
+        AC.Debug.Print(string.format("  %s  (%d quests, id %s)",
+            tostring(thread.name), questCount, tostring(thread.id)))
+    end
+
+    AC.Debug.Print("Threads stored: " .. count)
+    if count > 0 then
+        AC.Debug.Print("These persist to SavedVariables on logout or /reload.")
+    end
+end
+
 local function PrintLast()
     local db = AzerothChronicleDB
     local last = db.events[#db.events]
@@ -1332,6 +1358,8 @@ SlashCmdList["AZEROTHCHRONICLE"] = function(msg)
         PrintLast()
     elseif command == "apis" then
         PrintApis()
+    elseif command == "threads" then
+        PrintThreads()
     elseif command == "debug" then
         if arg == "on" then
             db.settings.debug = true
@@ -1357,6 +1385,6 @@ SlashCmdList["AZEROTHCHRONICLE"] = function(msg)
             AC.Debug.Print("Usage: /ac discovery on|off")
         end
     else
-        AC.Debug.Print("Commands: /ac journal, /ac status, /ac stats, /ac last, /ac apis, /ac debug on|off, /ac discovery on|off")
+        AC.Debug.Print("Commands: /ac journal, /ac status, /ac stats, /ac last, /ac apis, /ac threads, /ac debug on|off, /ac discovery on|off")
     end
 end

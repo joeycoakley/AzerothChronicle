@@ -129,11 +129,54 @@ def check_sandbox(raw):
     return problems
 
 
+def check_forward_references(raw):
+    """Flag a file-level local called before the line that declares it.
+
+    In Lua a name used above its `local` declaration silently resolves to a
+    global, which is nil. Nothing errors at load; the call just fails at
+    runtime, and WoW hides Lua errors by default, so it fails invisibly.
+
+    This bit twice during development, both times in the UI where one
+    renderer referenced another defined further down the file.
+    """
+    problems = []
+    lines = strip_comments_and_strings(raw).split('\n')
+
+    declared = {}
+    for number, line in enumerate(lines, 1):
+        stripped = line.strip()
+
+        # `local A, B` with no assignment: a forward declaration.
+        match = re.match(r'^local ([A-Za-z_][\w, ]*)$', stripped)
+        if match and '=' not in stripped:
+            for name in match.group(1).split(','):
+                declared.setdefault(name.strip(), number)
+
+        match = re.match(r'^local function (\w+)', stripped)
+        if match:
+            declared.setdefault(match.group(1), number)
+
+    for name, declaration_line in declared.items():
+        if not name or len(name) < 3:
+            continue
+        pattern = re.compile(r'(?<![\w.])' + re.escape(name) + r'\s*\(')
+        for number, line in enumerate(lines[:declaration_line - 1], 1):
+            if pattern.search(line):
+                problems.append(
+                    '%s is called on line %d but declared on line %d, '
+                    'so that call resolves to a nil global'
+                    % (name, number, declaration_line))
+                break
+
+    return problems
+
+
 def check_file(path):
     raw = Path(path).read_text(encoding='utf-8')
     code = strip_comments_and_strings(raw)
 
-    problems = check_structure(code) + check_sandbox(raw)
+    problems = (check_structure(code) + check_sandbox(raw)
+                + check_forward_references(raw))
 
     if problems:
         print('FAIL %s' % path)

@@ -95,6 +95,7 @@ something you can check.
 /ac                   open the journal pane
 /ac status            character, session, event counts
 /ac journal threads   story threads you have grouped by hand
+/ac threads           what is actually stored, for when the pane disagrees
 /ac stats             counts broken out by capture type
 /ac last              the most recently recorded event
 /ac apis              which client APIs resolved, plus live location readout

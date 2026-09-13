@@ -33,6 +33,7 @@ local RenderQuestDetail, RenderNpcDetail, RenderZoneDetail
 local RenderThreadDetail, RenderThreadPicker
 local rowPool = {}
 local navButtons = {}
+local pendingThreadQuestId
 local currentView = "journey"
 local detailStack = {}
 
@@ -605,8 +606,11 @@ function RenderThreadPicker(questId)
 
     addRow("|cff55ff55New thread...|r", "Name a story and start it with this quest.",
         function()
+            pendingThreadQuestId = questId
             if StaticPopup_Show then
-                StaticPopup_Show("AZEROTH_CHRONICLE_NEW_THREAD", nil, nil, { questId = questId })
+                StaticPopup_Show("AZEROTH_CHRONICLE_NEW_THREAD")
+            else
+                AC.Debug.Print("This client has no StaticPopup_Show; cannot name a thread.")
             end
         end)
 
@@ -883,6 +887,70 @@ end
 
 -- Naming a thread needs a text prompt, and Blizzard's own popup is the
 -- native way to ask for one rather than building a bespoke dialog.
+--
+-- Everything below is deliberately defensive, because the client hides Lua
+-- errors unless the player has turned them on. A mistake in a popup handler
+-- is invisible by default: the dialog closes, nothing happens, and there is
+-- no way to tell a failed call from a silent no-op. So handlers report
+-- through the addon's own channel, and nothing depends on a field name that
+-- might differ between client branches.
+
+local function SafeUI(context, fn, ...)
+    local ok, err = pcall(fn, ...)
+    if not ok then
+        if AC.Debug and AC.Debug.Error then
+            AC.Debug.Error(context, err)
+        else
+            print("Azeroth Chronicle error in " .. tostring(context) .. ": " .. tostring(err))
+        end
+    end
+    return ok
+end
+
+-- The edit box has been reachable under different names across branches, so
+-- try each rather than assuming one and failing quietly.
+local function PopupEditBoxText(dialog)
+    if not dialog then return "" end
+
+    local box = dialog.editBox or dialog.EditBox
+    if not box and dialog.GetName and dialog:GetName() then
+        box = _G[dialog:GetName() .. "EditBox"]
+    end
+    if not box and dialog.GetEditBox then
+        local ok, result = pcall(dialog.GetEditBox, dialog)
+        if ok then box = result end
+    end
+
+    if not box or not box.GetText then return "" end
+    return box:GetText() or ""
+end
+
+-- pendingThreadQuestId is declared with the other file locals so the picker,
+-- which runs earlier in the file, assigns the same upvalue this reads.
+
+local function CreateThreadFromPopup(dialog)
+    local name = PopupEditBoxText(dialog):match("^%s*(.-)%s*$")
+
+    if name == "" then
+        AC.Debug.Print("A thread needs a name. Nothing was created.")
+        return
+    end
+
+    local threadId = AC.Threads and AC.Threads.Create(name)
+    if not threadId then
+        AC.Debug.Print("Could not create the thread \"" .. name .. "\".")
+        return
+    end
+
+    if pendingThreadQuestId then
+        AC.Threads.AddQuest(threadId, pendingThreadQuestId)
+    end
+    pendingThreadQuestId = nil
+
+    AC.Debug.Print("Thread created: " .. name)
+    AC.Journal.ShowThread(threadId)
+end
+
 StaticPopupDialogs = StaticPopupDialogs or {}
 StaticPopupDialogs["AZEROTH_CHRONICLE_NEW_THREAD"] = {
     text = "Name this story thread",
@@ -896,35 +964,33 @@ StaticPopupDialogs["AZEROTH_CHRONICLE_NEW_THREAD"] = {
     preferredIndex = 3,
 
     OnShow = function(self)
-        if self.editBox then
-            self.editBox:SetText("")
-            self.editBox:SetFocus()
-        end
+        SafeUI("NewThread.OnShow", function()
+            local box = self.editBox or self.EditBox
+            if box then
+                box:SetText("")
+                box:SetFocus()
+            end
+        end)
     end,
 
-    OnAccept = function(self, data)
-        local name = self.editBox and self.editBox:GetText() or ""
-        local threadId = AC.Threads and AC.Threads.Create(name)
-        if not threadId then return end
-
-        if data and data.questId then
-            AC.Threads.AddQuest(threadId, data.questId)
-        end
-        AC.Journal.ShowThread(threadId)
+    OnAccept = function(self)
+        SafeUI("NewThread.OnAccept", CreateThreadFromPopup, self)
     end,
 
     EditBoxOnEnterPressed = function(self)
-        local parent = self:GetParent()
-        if parent and parent.button1 and parent.button1:IsEnabled() then
-            local dialog = StaticPopupDialogs["AZEROTH_CHRONICLE_NEW_THREAD"]
-            dialog.OnAccept(parent, parent.data)
-        end
-        if parent then parent:Hide() end
+        local dialog = self:GetParent()
+        SafeUI("NewThread.OnEnter", CreateThreadFromPopup, dialog)
+        if dialog then dialog:Hide() end
     end,
 
     EditBoxOnEscapePressed = function(self)
-        local parent = self:GetParent()
-        if parent then parent:Hide() end
+        pendingThreadQuestId = nil
+        local dialog = self:GetParent()
+        if dialog then dialog:Hide() end
+    end,
+
+    OnCancel = function()
+        pendingThreadQuestId = nil
     end,
 }
 
