@@ -89,6 +89,37 @@ suite passes on a machine with no WoW installed.
   did not expose, and `status` reports any session where a required API was
   unavailable, so a gap in the data can be told apart from a capture bug.
 
+## Recaps
+
+The only feature that touches a network, and the only one with a dependency.
+
+```text
+pip install anthropic
+setx ANTHROPIC_API_KEY "..."        # or: ant auth login
+
+python companion/run.py sessions
+python companion/run.py recap --dry-run
+python companion/run.py recap
+```
+
+A play session here is a stretch of activity, not one of the addon's sessions.
+The addon records a session per reload, so an evening produces a dozen; they are
+regrouped by gaps in the timeline, two hours by default, adjustable with `--gap`.
+
+**Read `--dry-run` output before you trust the feature.** It prints the exact
+text that would be sent and sends nothing. The spoiler promise is that the model
+only ever sees what the character encountered, and a privacy claim you cannot
+inspect is worth very little. Two things enforce it: retrieval decides what can
+be known, and the system prompt forbids filling gaps from the model's own
+knowledge of Warcraft. Both are needed.
+
+Every recap stores the ids of the events it was built from, so a summary can be
+audited against its sources and regenerated later with a better model. Identical
+input is not billed twice; pass `--force` to override that.
+
+Without the package or a key, recaps explain what is missing and everything else
+keeps working.
+
 ## Not built yet
 
 Milestone 5 and the rest of V1: storyline inference, retrieval, the language

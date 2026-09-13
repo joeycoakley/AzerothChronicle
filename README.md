@@ -142,6 +142,14 @@ python companion/run.py quests
 python companion/run.py show 456
 ```
 
+A recap of your last stretch of play is available too, and it is the only
+feature that talks to a network:
+
+```text
+python companion/run.py recap --dry-run   # prints exactly what would be sent
+python companion/run.py recap             # generates it
+```
+
 Importing twice inserts nothing the second time, and deleting the database loses
 nothing, because SQLite here is a rebuildable index over the raw journal rather
 than the journal itself. See [companion/README.md](companion/README.md).

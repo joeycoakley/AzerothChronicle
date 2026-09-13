@@ -179,6 +179,108 @@ def cmd_show(args):
     return 0
 
 
+def _format_window(start, end):
+    import datetime
+    fmt = '%d %b %H:%M'
+    return '%s to %s' % (datetime.datetime.fromtimestamp(start).strftime(fmt),
+                         datetime.datetime.fromtimestamp(end).strftime(fmt))
+
+
+def cmd_sessions(args):
+    """Stretches of play, which is not the same as the addon's sessions."""
+    from . import context as context_module
+
+    conn = _open(args)
+    sessions = context_module.find_play_sessions(conn, args.gap * 60)
+
+    if not sessions:
+        print('No recorded activity yet.')
+        return 0
+
+    for number, session in enumerate(reversed(sessions), 1):
+        print('%2d. %s   %d events'
+              % (number, _format_window(session.start, session.end),
+                 session.event_count))
+    print('\nThe most recent is 1. Recap one with: recap --session N')
+    return 0
+
+
+def cmd_recap(args):
+    from . import context as context_module
+
+    conn = _open(args)
+    sessions = context_module.find_play_sessions(conn, args.gap * 60)
+
+    if not sessions:
+        print('No recorded activity to recap yet. Import a capture first.')
+        return 1
+
+    ordered = list(reversed(sessions))
+    if args.session < 1 or args.session > len(ordered):
+        print('There are %d recorded play sessions; asked for %d.'
+              % (len(ordered), args.session))
+        return 1
+
+    session = ordered[args.session - 1]
+    text, event_ids, stats = context_module.build_recap_context(
+        conn, session, max_quests=args.max_quests)
+
+    print('Play session: %s' % _format_window(session.start, session.end))
+    print('Drawn from %d events: %d quests, %d characters.'
+          % (stats['events'], stats['quests'], stats['npcs']))
+    print()
+
+    if args.dry_run:
+        # The whole point of the spoiler promise is that it can be checked.
+        print('--- exactly what would be sent, and nothing else ---')
+        print(text)
+        print('--- end ---')
+        print('\nNothing was sent. Drop --dry-run to generate the recap.')
+        return 0
+
+    from . import llm
+
+    digest = context_module.context_hash(text)
+    cached = conn.execute(
+        'SELECT text, model FROM summaries WHERE context_hash = ?', (digest,)
+    ).fetchone()
+
+    if cached and not args.force:
+        print(cached['text'])
+        print('\n(unchanged since the last recap, so it was not regenerated;'
+              ' use --force to redo it)')
+        return 0
+
+    try:
+        result = llm.summarize(text)
+    except (llm.LlmUnavailable, llm.LlmRefused) as exc:
+        print(exc)
+        return 1
+
+    print(result['text'])
+
+    if not args.no_save:
+        import json as json_module
+        import time as time_module
+        character = conn.execute('SELECT character_id FROM characters LIMIT 1').fetchone()
+        conn.execute(
+            'INSERT OR REPLACE INTO summaries ('
+            ' summary_id, character_id, kind, window_start, window_end, model,'
+            ' created_at, context_hash, text, source_event_ids_json'
+            ') VALUES (?,?,?,?,?,?,?,?,?,?)',
+            ('recap-%s' % digest,
+             character['character_id'] if character else None,
+             'session_recap', session.start, session.end, result['model'],
+             int(time_module.time()), digest, result['text'],
+             json_module.dumps(event_ids)))
+        conn.commit()
+
+    if result['input_tokens']:
+        print('\n(%s, %s tokens in, %s out)'
+              % (result['model'], result['input_tokens'], result['output_tokens']))
+    return 0
+
+
 def cmd_rebuild(args):
     """Prove the derived tables are disposable by discarding and redoing them."""
     conn = _open(args)
@@ -219,6 +321,26 @@ def build_parser():
     p = sub.add_parser('show', help='everything captured about one quest')
     p.add_argument('quest_id', type=int)
     p.set_defaults(func=cmd_show)
+
+    p = sub.add_parser('sessions', help='stretches of play the Chronicle recorded')
+    p.add_argument('--gap', type=int, default=120,
+                   help='minutes of inactivity that end a session (default 120)')
+    p.set_defaults(func=cmd_sessions)
+
+    p = sub.add_parser('recap', help='summarize a stretch of play')
+    p.add_argument('--session', type=int, default=1,
+                   help='which play session, 1 being the most recent')
+    p.add_argument('--gap', type=int, default=120,
+                   help='minutes of inactivity that end a session (default 120)')
+    p.add_argument('--dry-run', action='store_true',
+                   help='print exactly what would be sent, and send nothing')
+    p.add_argument('--force', action='store_true',
+                   help='regenerate even if an identical recap already exists')
+    p.add_argument('--no-save', action='store_true',
+                   help='do not store the result')
+    p.add_argument('--max-quests', type=int, default=None,
+                   help='cap how many quests go into the context')
+    p.set_defaults(func=cmd_recap)
 
     p = sub.add_parser('rebuild', help='rebuild derived tables from raw events')
     p.set_defaults(func=cmd_rebuild)
