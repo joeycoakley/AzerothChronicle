@@ -28,7 +28,7 @@ local FRAME_WIDTH, FRAME_HEIGHT = 760, 500
 local NAV_WIDTH = 150
 local ROW_HEIGHT = 34
 
-local frame, contentScroll, contentChild, detailText, headerText, breadcrumb
+local frame, contentScroll, contentChild, detailText, headerText, breadcrumb, searchBox
 local rowPool = {}
 local navButtons = {}
 local currentView = "journey"
@@ -39,6 +39,7 @@ local VIEWS = {
     { key = "quests", label = "Quests" },
     { key = "characters", label = "Characters" },
     { key = "places", label = "Places" },
+    { key = "search", label = "Search" },
 }
 
 -- ============================================================
@@ -94,14 +95,19 @@ local function AcquireRow(index)
     highlight:SetAllPoints(row)
     highlight:SetColorTexture(1, 1, 1, 0.08)
 
+    -- Rows are a fixed height, so neither line may wrap. A search snippet
+    -- is long by nature and would otherwise spill over the row beneath it.
     row.title = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     row.title:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -3)
+    row.title:SetPoint("RIGHT", row, "RIGHT", -4, 0)
     row.title:SetJustifyH("LEFT")
+    row.title:SetWordWrap(false)
 
     row.detail = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     row.detail:SetPoint("TOPLEFT", row.title, "BOTTOMLEFT", 0, -2)
     row.detail:SetPoint("RIGHT", row, "RIGHT", -4, 0)
     row.detail:SetJustifyH("LEFT")
+    row.detail:SetWordWrap(false)
 
     rowPool[index] = row
     return row
@@ -475,6 +481,82 @@ function Render.places()
     LayoutRows(count)
 end
 
+function Render.search()
+    ShowListMode()
+
+    local query = searchBox and searchBox:GetText() or ""
+    query = query:match("^%s*(.-)%s*$")
+
+    if query == "" then
+        SetHeader("Search")
+        local row = AcquireRow(1)
+        row.title:SetText("Type to search your history")
+        row.detail:SetText(
+            "Searches quest text, what characters said to you, names and places. "
+            .. "Only what you have actually encountered.")
+        row:SetScript("OnClick", nil)
+        LayoutRows(1)
+        return
+    end
+
+    local results = AC.Index.Search(query)
+    SetHeader("Search", results.total
+        .. (results.total == 1 and " result for " or " results for ") .. '"' .. query .. '"')
+
+    local count = 0
+    local function addRow(title, detail, onClick)
+        count = count + 1
+        local row = AcquireRow(count)
+        row.title:SetText(title)
+        row.detail:SetText(detail or "")
+        row:SetScript("OnClick", onClick)
+        row:EnableMouse(onClick ~= nil)
+    end
+
+    if results.total == 0 then
+        addRow("Nothing found",
+            "Your character has not encountered anything matching that yet.")
+        LayoutRows(count)
+        return
+    end
+
+    for _, hit in ipairs(results.npcs) do
+        addRow("|cff99ccff" .. NpcDisplayName(hit.npc) .. "|r",
+            table.concat(hit.npc.evidence, ", "),
+            function()
+                detailStack = {}
+                PushDetail(function() RenderNpcDetail(hit.npc.key) end)
+            end)
+    end
+
+    for _, hit in ipairs(results.quests) do
+        addRow("|cffffd100" .. (hit.quest.title or ("Quest " .. hit.quest.id)) .. "|r",
+            "in " .. hit.field .. ": " .. (hit.snippet or ""),
+            function()
+                detailStack = {}
+                PushDetail(function() RenderQuestDetail(hit.quest.id) end)
+            end)
+    end
+
+    for _, hit in ipairs(results.dialogue) do
+        addRow(NpcDisplayName(hit.npc) .. " |cff999999(" .. hit.kind .. ")|r",
+            hit.snippet or "",
+            function()
+                detailStack = {}
+                PushDetail(function() RenderNpcDetail(hit.npc.key) end)
+            end)
+    end
+
+    for _, hit in ipairs(results.zones) do
+        addRow(hit.zone.name, "a place you have been", function()
+            detailStack = {}
+            PushDetail(function() RenderZoneDetail(hit.zone.name) end)
+        end)
+    end
+
+    LayoutRows(count)
+end
+
 -- ============================================================
 -- Frame construction
 -- ============================================================
@@ -538,6 +620,37 @@ local function BuildFrame()
     back:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 14)
     back:SetText("Back")
     back:SetScript("OnClick", GoBack)
+
+    -- Always visible, not just on the search view: the question it answers
+    -- ("where do I know that name from") arrives while reading something
+    -- else, and hiding the box behind a tab would add a step to the one
+    -- interaction the pane exists for.
+    searchBox = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+    searchBox:SetSize(190, 20)
+    searchBox:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -34, -32)
+    searchBox:SetAutoFocus(false)
+    searchBox:SetMaxLetters(80)
+
+    local searchLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    searchLabel:SetPoint("RIGHT", searchBox, "LEFT", -6, 0)
+    searchLabel:SetText("Search")
+
+    searchBox:SetScript("OnTextChanged", function()
+        if currentView ~= "search" then
+            AC.Journal.Show("search")
+        else
+            local ok, err = pcall(Render.search)
+            if not ok and AC.Debug and AC.Debug.Error then
+                AC.Debug.Error("Journal.search", err)
+            end
+        end
+    end)
+    searchBox:SetScript("OnEscapePressed", function(self)
+        self:SetText("")
+        self:ClearFocus()
+        AC.Journal.Show("journey")
+    end)
+    searchBox:SetScript("OnEnterPressed", function(self) self:ClearFocus() end)
 
     headerText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     headerText:SetPoint("TOPLEFT", frame, "TOPLEFT", NAV_WIDTH + 12, -34)

@@ -484,6 +484,103 @@ function AC.Index.ZonesByRecency()
     return list
 end
 
+-- ============================================================
+-- Search
+--
+-- Searches the captured text itself, not just titles. The question this
+-- exists to answer is "where do I know that name from", and the answer is
+-- usually buried in the middle of a quest description the player read
+-- three weeks ago.
+-- ============================================================
+
+local SNIPPET_PADDING = 70
+
+-- Returns the matched text with enough either side to be recognizable,
+-- so a result explains itself rather than just asserting a hit.
+local function Snippet(text, queryLower)
+    if not text then return nil end
+
+    local startPos = text:lower():find(queryLower, 1, true)
+    if not startPos then return nil end
+
+    local from = math.max(1, startPos - SNIPPET_PADDING)
+    local to = math.min(#text, startPos + #queryLower + SNIPPET_PADDING)
+
+    local snippet = text:sub(from, to)
+    snippet = snippet:gsub("\n", " ")
+
+    if from > 1 then snippet = "..." .. snippet end
+    if to < #text then snippet = snippet .. "..." end
+
+    return snippet
+end
+
+local function Contains(text, queryLower)
+    return type(text) == "string" and text:lower():find(queryLower, 1, true) ~= nil
+end
+
+function AC.Index.Search(query)
+    local results = { quests = {}, npcs = {}, zones = {}, dialogue = {}, total = 0 }
+
+    if type(query) ~= "string" then return results end
+    query = query:match("^%s*(.-)%s*$")
+    if query == "" then return results end
+
+    local queryLower = query:lower()
+    local index = AC.Index.Get()
+
+    for _, questId in ipairs(index.questOrder) do
+        local quest = index.quests[questId]
+        local field, snippet
+
+        -- Title first so an exact name match explains itself simply, then
+        -- the body text, which is where most recollection actually lives.
+        if Contains(quest.title, queryLower) then
+            field, snippet = "title", quest.title
+        elseif Contains(quest.description, queryLower) then
+            field, snippet = "description", Snippet(quest.description, queryLower)
+        elseif Contains(quest.objectivesText, queryLower) then
+            field, snippet = "objectives", Snippet(quest.objectivesText, queryLower)
+        elseif Contains(quest.completionText, queryLower) then
+            field, snippet = "completion", Snippet(quest.completionText, queryLower)
+        end
+
+        if field then
+            results.quests[#results.quests + 1] = {
+                quest = quest, field = field, snippet = snippet,
+            }
+        end
+    end
+
+    for _, npcKey in ipairs(index.npcOrder) do
+        local npc = index.npcs[npcKey]
+        if Contains(npc.name, queryLower) then
+            results.npcs[#results.npcs + 1] = { npc = npc, field = "name" }
+        else
+            for _, entry in ipairs(npc.dialogue) do
+                if Contains(entry.text, queryLower) then
+                    results.dialogue[#results.dialogue + 1] = {
+                        npc = npc,
+                        kind = entry.kind,
+                        timestamp = entry.timestamp,
+                        snippet = Snippet(entry.text, queryLower),
+                    }
+                    break
+                end
+            end
+        end
+    end
+
+    for _, zoneName in ipairs(index.zoneOrder) do
+        if Contains(zoneName, queryLower) then
+            results.zones[#results.zones + 1] = { zone = index.zones[zoneName] }
+        end
+    end
+
+    results.total = #results.quests + #results.npcs + #results.zones + #results.dialogue
+    return results
+end
+
 function AC.Index.RecentTimeline(limit)
     local index = AC.Index.Get()
     local list = {}

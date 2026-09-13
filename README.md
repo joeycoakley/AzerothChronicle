@@ -75,7 +75,10 @@ at session boundaries rather than streaming.
 
 ## The journal pane
 
-`/ac` opens it. Four views: Journey, Quests, Characters, Places. Everything in
+`/ac` opens it. Five views: Journey, Quests, Characters, Places, Search. The
+search box is always visible, because the question it answers arrives while
+you are reading something else. It searches the captured text itself, not just
+titles, and shows the matching passage so a result explains why it matched. Everything in
 it is computed in memory from the events already captured, so it includes the
 session in progress, needs no reload, and works with no network and no
 language model.
