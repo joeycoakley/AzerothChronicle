@@ -1,0 +1,13 @@
+-- Supports the in-game "Request recap" button.
+--
+-- The addon cannot generate a recap itself, so this is the one signal it
+-- can send: a timestamp saying "I want a recap of what I've done up to
+-- here," written to SavedVariables and reaching the companion the normal
+-- way, on the next import. It overrides the watcher's usual "wait until
+-- the session has been quiet for a while" rule for one specific session,
+-- because the player explicitly asked, right now.
+--
+-- Lives on the character record, not as an event: it is the player asking
+-- for something, not an observation of something that happened, so it does
+-- not belong in the append-only journal.
+ALTER TABLE characters ADD COLUMN recap_requested_at INTEGER;

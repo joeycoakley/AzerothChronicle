@@ -100,7 +100,10 @@ def ingest_events(conn, payload, source='<memory>', imported_at=None):
     character = payload.get('character') or {}
     character_id = character.get('guid')
 
-    _upsert_character(conn, character)
+    # A top-level field, sibling to character/events/sessions, not inside
+    # the character block itself: it is the player asking for something
+    # via the in-game button, not a fact about who they are.
+    _upsert_character(conn, character, recap_requested_at=payload.get('recapRequestedAt'))
     _upsert_sessions(conn, payload.get('sessions') or {}, character_id)
 
     events = payload.get('events') or []
@@ -157,14 +160,15 @@ def ingest_events(conn, payload, source='<memory>', imported_at=None):
     return result
 
 
-def _upsert_character(conn, character):
+def _upsert_character(conn, character, recap_requested_at=None):
     guid = character.get('guid')
     if not guid:
         return
     conn.execute(
         'INSERT INTO characters ('
-        ' character_id, name, realm, class, race, faction, level_last_seen, first_seen_at'
-        ') VALUES (?,?,?,?,?,?,?,?)'
+        ' character_id, name, realm, class, race, faction, level_last_seen,'
+        ' first_seen_at, recap_requested_at'
+        ') VALUES (?,?,?,?,?,?,?,?,?)'
         ' ON CONFLICT(character_id) DO UPDATE SET'
         '   name = excluded.name,'
         '   realm = excluded.realm,'
@@ -183,10 +187,19 @@ def _upsert_character(conn, character):
         '     WHEN characters.level_last_seen IS NULL THEN excluded.level_last_seen'
         '     WHEN excluded.level_last_seen IS NULL THEN characters.level_last_seen'
         '     ELSE MAX(characters.level_last_seen, excluded.level_last_seen)'
+        '   END,'
+        # Same shape, same reason: a capture with no fresh request must not
+        # erase a request already recorded, and an older request timestamp
+        # must not overwrite a newer one that was already seen.
+        '   recap_requested_at = CASE'
+        '     WHEN characters.recap_requested_at IS NULL THEN excluded.recap_requested_at'
+        '     WHEN excluded.recap_requested_at IS NULL THEN characters.recap_requested_at'
+        '     ELSE MAX(characters.recap_requested_at, excluded.recap_requested_at)'
         '   END',
         (guid, character.get('name'), character.get('realm'), character.get('class'),
          character.get('race'), character.get('faction'),
-         _as_int(character.get('level')), int(time.time())))
+         _as_int(character.get('level')), int(time.time()),
+         _as_int(recap_requested_at)))
 
 
 def _upsert_sessions(conn, sessions, character_id):

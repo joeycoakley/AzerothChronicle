@@ -192,6 +192,26 @@ recaps and publishes it automatically. A system tray icon shows it's alive
 error) with a right-click menu for "Recap now" and "Quit". Logs go to
 `~/.azeroth-chronicle/watcher.log`.
 
+Note that the tray menu's "Recap now" still respects the closed-session rule
+- it forces an early check, not an early close, so clicking it moments after
+turning in a quest finds nothing new yet. For that, use the in-game button
+below instead.
+
+### Getting a recap without waiting
+
+Waiting two hours (or logging off for the night) is the normal way a session
+closes, but the journal pane also has a "Request recap" button - on the
+Journey view and on the Recaps view - for "I just did some things, summarize
+this now." Clicking it writes one timestamp into SavedVariables and reloads
+the UI immediately, which is what actually lets the companion see the
+request without you remembering to `/reload` by hand.
+
+That request overrides the wall-clock rule for the session you were just in,
+nothing else. The recap itself still runs in the background at its usual
+pace, and still needs one further login or `/reload` to actually appear
+under Recaps - a button in a sandboxed addon can shorten the wait, not
+collapse the whole round trip into one click.
+
 To build it as a standalone `.exe` that needs no Python installed at all
 (handy for giving this to a friend, per the spec's "shareable, but not SaaS"
 principle):

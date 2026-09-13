@@ -49,8 +49,11 @@ class RecapTestCase(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
-    def ingest(self, events):
-        importer.ingest_events(self.conn, {'character': CHARACTER, 'events': events})
+    def ingest(self, events, recap_requested_at=None):
+        payload = {'character': CHARACTER, 'events': events}
+        if recap_requested_at is not None:
+            payload['recapRequestedAt'] = recap_requested_at
+        importer.ingest_events(self.conn, payload)
         importer.materialize(self.conn)
         self.conn.commit()
 
@@ -146,6 +149,57 @@ class TestFindClosedSessions(RecapTestCase):
 
     def test_no_events_returns_empty(self):
         self.assertEqual(context_module.find_closed_sessions(self.conn), [])
+
+
+class TestRecapRequestOverride(RecapTestCase):
+    """The in-game "Request recap" button: a session that would otherwise
+    still be open closes immediately if the player explicitly asked."""
+
+    def test_a_request_during_the_session_closes_it_early(self):
+        self.ingest([event('e1', 'GOSSIP_SHOW', 1000, gossip={'text': 'a'})],
+                   recap_requested_at=1005)
+        closed = context_module.find_closed_sessions(
+            self.conn, gap_seconds=HOUR, now=1000 + 10)  # moments later, gap not elapsed
+        self.assertEqual(len(closed), 1, 'an explicit request should close it despite the gap')
+
+    def test_a_request_right_after_the_session_also_closes_it(self):
+        # Clicking the button triggers a reload, which itself may not add a
+        # new event to the session at all - the request can land slightly
+        # after the last captured event and must still count.
+        self.ingest([event('e1', 'GOSSIP_SHOW', 1000, gossip={'text': 'a'})],
+                   recap_requested_at=1002)
+        closed = context_module.find_closed_sessions(
+            self.conn, gap_seconds=HOUR, now=1000 + 10)
+        self.assertEqual(len(closed), 1)
+
+    def test_a_stale_request_from_before_this_session_does_not_apply(self):
+        # An old request (already acted on, or simply from a prior day)
+        # must not force-close an unrelated, unfinished session.
+        self.ingest([event('e1', 'GOSSIP_SHOW', 1000, gossip={'text': 'a'})],
+                   recap_requested_at=500)  # before this session even started
+        closed = context_module.find_closed_sessions(
+            self.conn, gap_seconds=HOUR, now=1000 + 10)
+        self.assertEqual(closed, [])
+
+    def test_no_request_behaves_exactly_as_before(self):
+        self.ingest([event('e1', 'GOSSIP_SHOW', 1000, gossip={'text': 'a'})])
+        closed = context_module.find_closed_sessions(
+            self.conn, gap_seconds=HOUR, now=1000 + 10)
+        self.assertEqual(closed, [])
+
+    def test_request_does_not_reopen_an_already_closed_earlier_session(self):
+        # The override only ever needs to apply to the single most recent
+        # session - every earlier one is already unconditionally closed.
+        self.ingest([
+            event('e1', 'GOSSIP_SHOW', 1000, gossip={'text': 'a'}),
+            event('e2', 'GOSSIP_SHOW', 1000 + 5 * HOUR, gossip={'text': 'b'}),
+        ], recap_requested_at=1005)  # request lands during the FIRST session
+        closed = context_module.find_closed_sessions(
+            self.conn, gap_seconds=2 * HOUR, now=1000 + 5 * HOUR)
+        # First session closed regardless (as always); second still open
+        # (no gap elapsed, and the request predates it).
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(closed[0].event_count, 1)
 
 
 if __name__ == '__main__':

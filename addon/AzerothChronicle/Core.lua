@@ -24,6 +24,7 @@ local ADDON_NAME = ...
 AC = AC or {}
 AC.API = {}
 AC.Debug = {}
+AC.Session = {}
 AC.state = { unregisteredEvents = {} }
 
 local SCHEMA_VERSION = 1
@@ -953,6 +954,41 @@ local function CaptureCompletionAudit()
     })
 end
 
+-- ============================================================
+-- Player-requested recap
+--
+-- The addon cannot call the local model or talk to the companion process
+-- directly - it is sandboxed, same as always. What it can do is write one
+-- timestamp into the saved data and trigger the write itself, rather than
+-- making the player remember to /reload by hand.
+--
+-- This is a request, not a guarantee: nothing happens until the companion
+-- or the background watcher next looks at this file, and nothing appears
+-- in-game until the following login or /reload after that. Both of those
+-- are stated in the button's own label rather than left to be discovered.
+-- ============================================================
+
+-- Recorded on the character record itself, not as an event: this is the
+-- player asking for something, not an observation of something that
+-- happened, so it does not belong in the append-only journal.
+function AC.Session.RequestRecap()
+    local db = AzerothChronicleDB
+    if not db then return end
+
+    db.recapRequestedAt = time()
+    AC.Debug.Print("Recap requested. Saving and reloading now; the recap"
+        .. " itself happens in the background and needs one more reload"
+        .. " to appear.")
+
+    -- ReloadUI is what /reload does when typed by hand. Calling it directly
+    -- is what makes this a one-click action instead of "click, then also
+    -- remember to type /reload yourself."
+    local ok, err = pcall(ReloadUI)
+    if not ok then
+        AC.Debug.Error("RequestRecap", err)
+    end
+end
+
 local questLogSnapshotTaken = false
 
 -- Records what was already in the quest log when the addon loaded, once per
@@ -1360,6 +1396,8 @@ SlashCmdList["AZEROTHCHRONICLE"] = function(msg)
         PrintApis()
     elseif command == "threads" then
         PrintThreads()
+    elseif command == "recap" then
+        AC.Session.RequestRecap()
     elseif command == "debug" then
         if arg == "on" then
             db.settings.debug = true
@@ -1385,6 +1423,6 @@ SlashCmdList["AZEROTHCHRONICLE"] = function(msg)
             AC.Debug.Print("Usage: /ac discovery on|off")
         end
     else
-        AC.Debug.Print("Commands: /ac journal, /ac status, /ac stats, /ac last, /ac apis, /ac threads, /ac debug on|off, /ac discovery on|off")
+        AC.Debug.Print("Commands: /ac journal, /ac status, /ac stats, /ac last, /ac apis, /ac threads, /ac recap, /ac debug on|off, /ac discovery on|off")
     end
 end

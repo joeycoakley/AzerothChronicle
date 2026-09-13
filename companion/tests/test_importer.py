@@ -93,6 +93,68 @@ class TestCharacterUpsert(ImporterTestCase):
                          'a later capture missing the field must not erase a known level')
 
 
+class TestRecapRequestUpsert(ImporterTestCase):
+    """recap_requested_at is a top-level payload field (the in-game
+    "Request recap" button), not part of the character block, and it uses
+    the same NULL-preserving CASE as level_last_seen for the same reason:
+    a capture with no fresh request must not erase one already recorded.
+    """
+
+    def test_no_request_stays_null(self):
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+            'events': [],
+        })
+        row = self.conn.execute('SELECT recap_requested_at FROM characters').fetchone()
+        self.assertIsNone(row['recap_requested_at'])
+
+    def test_a_request_is_recorded(self):
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+            'events': [], 'recapRequestedAt': 5000,
+        })
+        row = self.conn.execute('SELECT recap_requested_at FROM characters').fetchone()
+        self.assertEqual(row['recap_requested_at'], 5000)
+
+    def test_a_later_reimport_with_no_request_does_not_erase_it(self):
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+            'events': [], 'recapRequestedAt': 5000,
+        })
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+            'events': [],  # no fresh request this time
+        })
+        row = self.conn.execute('SELECT recap_requested_at FROM characters').fetchone()
+        self.assertEqual(row['recap_requested_at'], 5000,
+                         'a capture with no request must not erase a previous one')
+
+    def test_a_newer_request_replaces_an_older_one(self):
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+            'events': [], 'recapRequestedAt': 5000,
+        })
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+            'events': [], 'recapRequestedAt': 9000,
+        })
+        row = self.conn.execute('SELECT recap_requested_at FROM characters').fetchone()
+        self.assertEqual(row['recap_requested_at'], 9000)
+
+    def test_an_older_stale_request_does_not_walk_it_back(self):
+        # Re-importing an older file after a newer one must not regress.
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+            'events': [], 'recapRequestedAt': 9000,
+        })
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+            'events': [], 'recapRequestedAt': 5000,
+        })
+        row = self.conn.execute('SELECT recap_requested_at FROM characters').fetchone()
+        self.assertEqual(row['recap_requested_at'], 9000)
+
+
 class TestIdempotency(ImporterTestCase):
     def test_repeat_import_inserts_nothing_new(self):
         first = importer.import_file(self.conn, FIXTURE)

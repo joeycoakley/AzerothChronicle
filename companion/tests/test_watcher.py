@@ -29,7 +29,9 @@ def fake_summarize(text, **kwargs):
             'input_tokens': 10, 'output_tokens': 5}
 
 
-def saved_variables_lua(events_lua):
+def saved_variables_lua(events_lua, recap_requested_at=None):
+    requested_line = ('["recapRequestedAt"] = %d,\n' % recap_requested_at
+                      if recap_requested_at is not None else '')
     return (
         'AzerothChronicleDB = {\n'
         '["schemaVersion"] = 1,\n'
@@ -38,6 +40,7 @@ def saved_variables_lua(events_lua):
         '["sessions"] = {},\n'
         '["events"] = {\n' + events_lua + '\n},\n'
         '["settings"] = {},\n'
+        + requested_line +
         '}\n')
 
 
@@ -77,8 +80,9 @@ class WatcherTestCase(unittest.TestCase):
         self.conn.close()
         self.tmp.cleanup()
 
-    def write_events(self, events_lua):
-        self.sv_path.write_text(saved_variables_lua(events_lua), encoding='utf-8')
+    def write_events(self, events_lua, recap_requested_at=None):
+        self.sv_path.write_text(
+            saved_variables_lua(events_lua, recap_requested_at), encoding='utf-8')
 
 
 class TestRunOnce(WatcherTestCase):
@@ -110,6 +114,24 @@ class TestRunOnce(WatcherTestCase):
 
         self.assertEqual(result.new_recaps, [])
         mock_summarize.assert_not_called()
+
+    @mock.patch.object(llm_module, 'summarize', side_effect=fake_summarize)
+    def test_in_game_recap_request_closes_the_session_immediately(self, mock_summarize):
+        # The full round trip: real Lua text written by the addon's
+        # RequestRecap, parsed by luaparse.py, honored by
+        # find_closed_sessions, without waiting out the wall-clock gap.
+        recent_timestamp = 1000
+        self.write_events(
+            quest_event_lua('e1', recent_timestamp),
+            recap_requested_at=recent_timestamp + 5)
+
+        with mock.patch('time.time', return_value=recent_timestamp + 10):  # moments later
+            result = watcher.run_once(self.conn, wow_path=str(self.wow_root))
+
+        self.assertEqual(len(result.new_recaps), 1,
+                         'an explicit request must close the session despite the gap')
+        mock_summarize.assert_called_once()
+        self.assertEqual(len(result.published_to), 1)
 
     @mock.patch.object(llm_module, 'summarize', side_effect=fake_summarize)
     def test_second_pass_does_not_regenerate_or_republish(self, mock_summarize):

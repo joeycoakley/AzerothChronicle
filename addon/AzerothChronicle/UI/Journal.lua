@@ -415,6 +415,17 @@ function Render.journey()
         .. #index.zoneOrder .. " places, " .. index.eventCount .. " moments")
 
     LayoutRows(count)
+
+    -- The addon cannot generate a recap itself; this only asks for one.
+    -- Reloading now (via AC.Session.RequestRecap) is what lets the
+    -- companion see the request without the player remembering to /reload
+    -- by hand, but the recap itself still runs in the background and needs
+    -- one further reload to actually show up under Recaps.
+    ShowActionButton("Request recap (reloads UI)", function()
+        if AC.Session and AC.Session.RequestRecap then
+            AC.Session.RequestRecap()
+        end
+    end)
 end
 
 function Render.quests()
@@ -733,11 +744,25 @@ function Render.recaps()
 
     local recaps = AC.Summaries.ForCurrentCharacter()
 
+    -- Available whenever the bridge addon exists, whether or not a recap
+    -- has ever been generated yet - requesting one is exactly how you get
+    -- the first one, and exactly how you get a fresher one after playing
+    -- more since the last.
+    local function showRequestButton()
+        ShowActionButton("Request recap (reloads UI)", function()
+            if AC.Session and AC.Session.RequestRecap then
+                AC.Session.RequestRecap()
+            end
+        end)
+    end
+
     if #recaps == 0 then
         addRow("No recaps yet for this character",
-            "Run `python companion/run.py recap` after a play session, then"
-            .. " log in or /reload to see it here.")
+            "Click below, or run `python companion/run.py recap` from the"
+            .. " companion. Either way, generation happens in the"
+            .. " background and needs one more login or /reload to appear.")
         LayoutRows(count)
+        showRequestButton()
         return
     end
 
@@ -758,6 +783,7 @@ function Render.recaps()
     end
 
     LayoutRows(count)
+    showRequestButton()
 end
 
 function Render.search()

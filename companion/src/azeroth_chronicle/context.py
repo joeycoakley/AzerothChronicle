@@ -78,15 +78,23 @@ def find_closed_sessions(conn, gap_seconds=DEFAULT_GAP_SECONDS, now=None):
     """Sessions safe to recap: ones that cannot grow any more.
 
     Exists for the watcher, which reacts to a file changing rather than to
-    the player explicitly saying "I'm done." A session is closed once either
-    a later session already exists (so nothing more can be appended to it),
-    or enough wall-clock time has passed since its last event that a further
-    reload adding to it is no longer plausible - the same gap rule that
-    splits sessions in the first place, just measured against the clock
-    instead of only against events that already happened.
+    the player explicitly saying "I'm done." A session is closed once any
+    of the following holds:
 
-    Without the second condition, the most recent session would never be
-    recapped until the player did something else entirely, which for
+      - a later session already exists, so nothing more can be appended to
+        it;
+      - enough wall-clock time has passed since its last event that a
+        further reload adding to it is no longer plausible - the same gap
+        rule that splits sessions in the first place, just measured against
+        the clock instead of only against events that already happened;
+      - the player explicitly asked for a recap (the in-game "Request
+        recap" button) at or after this session started. That is a direct
+        request, not a heuristic, and overrides the other two: someone who
+        just turned in quests and wants a recap right now should not have
+        to wait out the gap window first.
+
+    Without the wall-clock condition, the most recent session would never
+    be recapped until the player did something else entirely, which for
     someone who plays once and logs off for the night is never.
     """
     import time as time_module
@@ -98,8 +106,17 @@ def find_closed_sessions(conn, gap_seconds=DEFAULT_GAP_SECONDS, now=None):
 
     closed = sessions[:-1]
     last = sessions[-1]
+
+    row = conn.execute(
+        'SELECT MAX(recap_requested_at) AS requested_at FROM characters').fetchone()
+    requested_at = row['requested_at'] if row else None
+
     if last.end is not None and (now - last.end) > gap_seconds:
         closed.append(last)
+    elif (requested_at is not None and last.start is not None
+          and requested_at >= last.start):
+        closed.append(last)
+
     return closed
 
 

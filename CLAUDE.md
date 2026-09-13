@@ -217,12 +217,23 @@ so rather than implying you tested it.
   command and the watcher call `recap.generate_and_save_recap` for exactly
   this reason - a second implementation would risk answering the question
   differently and either double-generating or missing a session.
-- **A session is "closed" (safe to recap) when either a later session already
-  exists, or enough wall-clock time has passed since its last event.** See
-  `context.find_closed_sessions`. The second condition matters as much as the
-  first: without it, whichever session is most recent never gets recapped
-  until the player does something else entirely, which for someone who plays
-  once and logs off is never. Do not recap the open (most recent, still
+- **A session is "closed" (safe to recap) when a later session already
+  exists, enough wall-clock time has passed since its last event, or the
+  player explicitly asked via the in-game "Request recap" button.** See
+  `context.find_closed_sessions`. The wall-clock condition matters as much
+  as the first: without it, whichever session is most recent never gets
+  recapped until the player does something else entirely, which for someone
+  who plays once and logs off is never. The request override exists because
+  waiting out the gap window is exactly the wrong answer to "I just turned
+  in some quests, summarize that now" - see `AC.Session.RequestRecap` in
+  `Core.lua`, which writes one timestamp (`recapRequestedAt`, a top-level
+  SavedVariables field, not an event - it is the player asking for
+  something, not an observation) and calls `ReloadUI()` itself so the
+  player never has to remember to `/reload` by hand. `_upsert_character` in
+  `importer.py` carries it forward with the same NULL-preserving CASE that
+  fixed the level bug below - a capture with no fresh request must not
+  erase one already recorded, and an older request must not undo a newer
+  one. Do not recap the open (most recent, still
   growing) session on a mere file-change trigger - that wastes a full local
   generation on a session that will just grow again.
 - **One `run_once` pass can and should recap more than one closed session** if
