@@ -728,6 +728,11 @@ local function RegisterCaptureEvents()
 
     tryRegister("GOSSIP_SHOW")
     tryRegister("ITEM_TEXT_READY")
+    -- Diagnostic companion to ITEM_TEXT_READY. Registering the frame-open
+    -- event too is what distinguishes "this object is not readable at all"
+    -- from "it opened but never delivered text", which otherwise look
+    -- identical from the outside: nothing captured, no error.
+    tryRegister("ITEM_TEXT_BEGIN")
     for _, evt in ipairs(QUEST_EVENTS) do
         tryRegister(evt)
     end
@@ -778,6 +783,21 @@ frame:SetScript("OnEvent", function(_, event, ...)
         SafeCall("QUEST_TURNED_IN", CaptureQuestTurnedIn, questId, xpReward, moneyReward)
     elseif event == "GOSSIP_SHOW" then
         SafeCall("GOSSIP_SHOW", CaptureGossip)
+    elseif event == "ITEM_TEXT_BEGIN" then
+        -- Deliberately logs without recording an event: the frame-open
+        -- signal carries no narrative text, and writing it to the journal
+        -- would add a payload-free entry for every page turn.
+        SafeCall("ITEM_TEXT_BEGIN", function()
+            local itemName
+            if ItemTextGetItem then
+                local okName, n = pcall(ItemTextGetItem)
+                if okName then itemName = n end
+            end
+            AC.Debug.Discover("ITEM_TEXT_BEGIN", {
+                item = itemName,
+                note = "readable frame opened, expecting ITEM_TEXT_READY next",
+            })
+        end)
     elseif event == "ITEM_TEXT_READY" then
         SafeCall("ITEM_TEXT_READY", CaptureItemText)
     elseif event == "CHAT_MSG_MONSTER_SAY" or event == "CHAT_MSG_MONSTER_YELL"
