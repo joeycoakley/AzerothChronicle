@@ -1,0 +1,38 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.swp
+
+# WoW client artifacts - never commit a real WTF directory or account data
+WTF/
+Cache/
+Logs/
+Screenshots/
+
+# Real SavedVariables captured from an actual play session (personal history).
+# Sanitized fixtures belong explicitly under samples/savedvariables/.
+*.lua.bak
+AzerothChronicleDB.lua
+
+# Companion (Python)
+companion/.venv/
+companion/venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Companion local data - never commit a real personal database
+companion/*.sqlite3
+companion/*.db
+*.sqlite3
+*.db
+
+# Secrets
+.env
+*.env
+credentials.json
+**/api_key*

@@ -1,0 +1,8 @@
+## Interface: 11509
+## Title: Azeroth Chronicle
+## Notes: Your personal record of the stories you discover in Azeroth.
+## Author: Joey
+## Version: 0.0.1
+## SavedVariablesPerCharacter: AzerothChronicleDB
+
+Core.lua
