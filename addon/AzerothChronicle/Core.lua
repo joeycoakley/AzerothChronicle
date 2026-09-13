@@ -355,6 +355,25 @@ function AC.API.GetQuestLogEntries()
     return nil
 end
 
+-- Reports whether this character has completed a given quest. It says
+-- nothing about prerequisites, which the client never exposes, but it does
+-- reveal turn-ins that happened while the addon was off or that its events
+-- missed. Returns nil when the client cannot answer, which is different
+-- from a confident false.
+function AC.API.IsQuestCompleted(questId)
+    if type(questId) ~= "number" then return nil end
+
+    if C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted then
+        local ok, result = pcall(C_QuestLog.IsQuestFlaggedCompleted, questId)
+        if ok then return result and true or false end
+    end
+    if IsQuestFlaggedCompleted then
+        local ok, result = pcall(IsQuestFlaggedCompleted, questId)
+        if ok then return result and true or false end
+    end
+    return nil
+end
+
 function AC.API.GetUnitIdentity(unit)
     local name, guid
     local ok1, n = pcall(UnitName, unit)
@@ -448,6 +467,7 @@ local API_PROBES = {
     { "ItemTextGetPage", function() return ItemTextGetPage end, "required" },
     { "ItemTextGetCreator", function() return ItemTextGetCreator end, "required" },
     { "C_QuestLog.GetInfo", function() return C_QuestLog and C_QuestLog.GetInfo end, "required" },
+    { "C_QuestLog.IsQuestFlaggedCompleted", function() return C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted end, "required" },
     { "C_Map.GetBestMapForUnit", function() return C_Map and C_Map.GetBestMapForUnit end, "required" },
     { "C_Map.GetPlayerMapPosition", function() return C_Map and C_Map.GetPlayerMapPosition end, "required" },
     { "GetZoneText", function() return GetZoneText end, "required" },
@@ -460,6 +480,7 @@ local API_PROBES = {
     { "GetGossipAvailableQuests", function() return GetGossipAvailableQuests end, "fallback" },
     { "GetPlayerMapPosition", function() return GetPlayerMapPosition end, "fallback" },
     { "GetQuestLogTitle", function() return GetQuestLogTitle end, "fallback" },
+    { "IsQuestFlaggedCompleted", function() return IsQuestFlaggedCompleted end, "fallback" },
     { "C_Map.GetBestMapID", function() return C_Map and C_Map.GetBestMapID end, "fallback" },
 }
 
@@ -869,6 +890,69 @@ local function CaptureLevelUp(newLevel, ...)
     })
 end
 
+local completionAuditDone = false
+
+-- Asks the client which of the quests we have ever recorded this character
+-- has actually completed, once per session.
+--
+-- Only quests with no turn-in event of their own are reported, because
+-- those are the new information: a quest handed in before the addon was
+-- installed, or during a session whose events were lost. A quest we watched
+-- being turned in tells us nothing we did not already know.
+local function CaptureCompletionAudit()
+    if completionAuditDone then return end
+
+    local db = AzerothChronicleDB
+    if not db or not db.events then return end
+
+    local seen, turnedIn = {}, {}
+    for _, event in ipairs(db.events) do
+        local quest = event.quest
+        local questId = quest and quest.id
+        if type(questId) == "number" then
+            seen[questId] = true
+            if event.type == "QUEST_TURNED_IN" then
+                turnedIn[questId] = true
+            end
+        end
+    end
+
+    local completed, checked = {}, 0
+    local answered = false
+
+    for questId in pairs(seen) do
+        local result = AC.API.IsQuestCompleted(questId)
+        if result ~= nil then
+            answered = true
+            checked = checked + 1
+            if result and not turnedIn[questId] then
+                completed[#completed + 1] = questId
+            end
+        end
+    end
+
+    -- If the client answered nothing, the API is unavailable on this build.
+    -- Leave the flag down so a later client change gets another chance.
+    if not answered then return end
+    completionAuditDone = true
+
+    AC.Debug.Discover("QUEST_COMPLETION_AUDIT", {
+        checked = checked,
+        newlyKnownComplete = #completed,
+    })
+
+    -- Nothing new to say is a perfectly normal outcome and not worth an
+    -- entry in a permanent history.
+    if #completed == 0 then return end
+
+    AppendEvent("QUEST_COMPLETION_AUDIT", {
+        completionAudit = {
+            completedQuestIds = completed,
+            questsChecked = checked,
+        },
+    })
+end
+
 local questLogSnapshotTaken = false
 
 -- Records what was already in the quest log when the addon loaded, once per
@@ -1068,6 +1152,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         SafeCall("QUEST_REMOVED", CaptureQuestRemoved, arg1, arg2)
     elseif event == "QUEST_LOG_UPDATE" then
         SafeCall("QUEST_LOG_UPDATE", CaptureQuestLogSnapshot)
+        SafeCall("QUEST_COMPLETION_AUDIT", CaptureCompletionAudit)
     elseif event == "ZONE_CHANGED_NEW_AREA" or event == "PLAYER_ENTERING_WORLD" then
         SafeCall(event, CaptureZoneDiscovery)
     elseif event == "PLAYER_LEVEL_UP" then

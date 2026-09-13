@@ -230,6 +230,8 @@ def materialize(conn):
             _accumulate_quest(quests, row, payload, event_type, npc_key)
         elif event_type == 'QUEST_LOG_SNAPSHOT':
             _accumulate_snapshot(quests, row, payload)
+        elif event_type == 'QUEST_COMPLETION_AUDIT':
+            _accumulate_completion_audit(quests, row, payload)
 
         if event_type == 'QUEST_GREETING':
             greeting = payload.get('greeting') or {}
@@ -369,6 +371,24 @@ def _accumulate_snapshot(quests, row, payload):
         fields.setdefault('known_from_snapshot', 1)
 
 
+def _accumulate_completion_audit(quests, row, payload):
+    """Mark quests the client confirms were completed, without a timestamp.
+
+    The addon only reports quests it has no turn-in event for, so every id
+    here is genuinely new information: finished before the addon existed, or
+    during a session whose events never reached disk.
+    """
+    audit = payload.get('completionAudit') or {}
+    for quest_id in audit.get('completedQuestIds') or []:
+        quest_id = _as_int(quest_id)
+        if quest_id is None:
+            continue
+        fields = quests.setdefault((row['character_id'], quest_id), {})
+        fields['known_complete'] = 1
+        if fields.get('first_seen_at') is None:
+            fields['first_seen_at'] = row['timestamp']
+
+
 def _record_zone(conn, row, discovery):
     zone = discovery.get('zone')
     if not zone:
@@ -398,6 +418,11 @@ def _resolve_abandonment(fields):
         return None
     if fields.get('turned_in_at') is not None:
         return None
+    # The client confirming the quest is complete is just as decisive as
+    # watching the turn-in. Without this, a quest finished during a lost
+    # session would be reported as abandoned, which is the opposite of true.
+    if fields.get('known_complete'):
+        return None
     return removed_at
 
 
@@ -411,14 +436,15 @@ def _write_quest(conn, character_id, quest_id, fields):
         'INSERT OR REPLACE INTO quests ('
         ' character_id, quest_id, title, first_seen_at, accepted_at, completed_at,'
         ' turned_in_at, giver_npc_key, description, objectives_text, completion_text,'
-        ' xp_reward, money_reward, abandoned_at, known_from_snapshot'
-        ') VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ' xp_reward, money_reward, abandoned_at, known_from_snapshot, known_complete'
+        ') VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (character_id, quest_id, fields.get('title'), fields.get('first_seen_at'),
          fields.get('accepted_at'), fields.get('completed_at'), fields.get('turned_in_at'),
          fields.get('giver_npc_key'), fields.get('description'),
          fields.get('objectives_text'), fields.get('completion_text'),
          fields.get('xp_reward'), fields.get('money_reward'),
-         _resolve_abandonment(fields), known_from_snapshot))
+         _resolve_abandonment(fields), known_from_snapshot,
+         1 if fields.get('known_complete') else 0))
 
 
 # -- entry point ---------------------------------------------------------

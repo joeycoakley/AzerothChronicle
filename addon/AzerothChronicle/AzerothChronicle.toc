@@ -6,5 +6,6 @@
 ## SavedVariablesPerCharacter: AzerothChronicleDB
 
 Core.lua
+Threads.lua
 Index.lua
 UI\Journal.lua

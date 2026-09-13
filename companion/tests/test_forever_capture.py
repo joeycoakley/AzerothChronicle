@@ -194,6 +194,51 @@ class TestZoneDiscovery(ForeverCaptureTestCase):
         self.assertEqual(len(rows), 1, 'rematerializing must not duplicate zones')
 
 
+class TestCompletionAudit(ForeverCaptureTestCase):
+    def test_audit_marks_quests_complete_without_inventing_a_time(self):
+        self.ingest([
+            event('e1', 'QUEST_COMPLETION_AUDIT', 100,
+                  completionAudit={'completedQuestIds': [900, 901], 'questsChecked': 5}),
+        ])
+        for quest_id in (900, 901):
+            row = self.quest(quest_id)
+            self.assertEqual(row['known_complete'], 1)
+            self.assertIsNone(row['turned_in_at'],
+                              'we never saw the turn-in, so there is no time to record')
+
+    def test_audit_prevents_a_false_abandonment(self):
+        # The quest was handed in during a session whose events were lost.
+        # Without the audit this reads as abandoned, the opposite of true.
+        self.ingest([
+            event('e1', 'QUEST_ACCEPTED', 100, quest={'id': 902}),
+            event('e2', 'QUEST_REMOVED', 200, quest={'id': 902}),
+            event('e3', 'QUEST_COMPLETION_AUDIT', 300,
+                  completionAudit={'completedQuestIds': [902]}),
+        ])
+        row = self.quest(902)
+        self.assertIsNone(row['abandoned_at'])
+        self.assertEqual(row['known_complete'], 1)
+
+    def test_genuine_abandonment_survives_an_audit_that_omits_it(self):
+        self.ingest([
+            event('e1', 'QUEST_ACCEPTED', 100, quest={'id': 903}),
+            event('e2', 'QUEST_REMOVED', 200, quest={'id': 903}),
+            event('e3', 'QUEST_COMPLETION_AUDIT', 300,
+                  completionAudit={'completedQuestIds': [999]}),
+        ])
+        self.assertEqual(self.quest(903)['abandoned_at'], 200)
+
+    def test_observed_turn_in_still_records_its_timestamp(self):
+        self.ingest([
+            event('e1', 'QUEST_TURNED_IN', 200, quest={'id': 904, 'xpReward': 50}),
+            event('e2', 'QUEST_COMPLETION_AUDIT', 300,
+                  completionAudit={'completedQuestIds': [904]}),
+        ])
+        row = self.quest(904)
+        self.assertEqual(row['turned_in_at'], 200)
+        self.assertEqual(row['xp_reward'], 50)
+
+
 class TestLevelUp(ForeverCaptureTestCase):
     def test_level_up_keeps_the_level_and_the_place(self):
         # Where you leveled is the interesting half. It comes free because

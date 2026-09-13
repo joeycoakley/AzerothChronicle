@@ -28,7 +28,9 @@ local FRAME_WIDTH, FRAME_HEIGHT = 760, 500
 local NAV_WIDTH = 150
 local ROW_HEIGHT = 34
 
-local frame, contentScroll, contentChild, detailText, headerText, breadcrumb, searchBox
+local frame, contentScroll, contentChild, detailText, headerText, breadcrumb, searchBox, actionButton
+local RenderQuestDetail, RenderNpcDetail, RenderZoneDetail
+local RenderThreadDetail, RenderThreadPicker
 local rowPool = {}
 local navButtons = {}
 local currentView = "journey"
@@ -39,6 +41,7 @@ local VIEWS = {
     { key = "quests", label = "Quests" },
     { key = "characters", label = "Characters" },
     { key = "places", label = "Places" },
+    { key = "threads", label = "Threads" },
     { key = "search", label = "Search" },
 }
 
@@ -132,12 +135,25 @@ local function LayoutRows(count)
     ReleaseRowsFrom(count + 1)
 end
 
+local function HideActionButton()
+    if actionButton then actionButton:Hide() end
+end
+
+local function ShowActionButton(label, onClick)
+    if not actionButton then return end
+    actionButton:SetText(label)
+    actionButton:SetScript("OnClick", onClick)
+    actionButton:Show()
+end
+
 local function ShowListMode()
+    HideActionButton()
     detailText:Hide()
     detailText:SetText("")
 end
 
 local function ShowDetailMode(text)
+    HideActionButton()
     ReleaseRowsFrom(1)
     detailText:SetText(text or "")
     detailText:Show()
@@ -175,7 +191,7 @@ end
 
 -- Quest detail is the page that matters most: it is where the captured
 -- wording lives. Everything is shown verbatim.
-local function RenderQuestDetail(questId)
+function RenderQuestDetail(questId)
     local index = AC.Index.Get()
     local quest = index.quests[questId]
     if not quest then return end
@@ -225,10 +241,34 @@ local function RenderQuestDetail(questId)
         add("\n|cffffd100Reward|r\n" .. table.concat(reward, ", "))
     end
 
+    local threads = AC.Threads and AC.Threads.ForQuest(questId) or {}
+    if #threads > 0 then
+        local names = {}
+        for _, thread in ipairs(threads) do names[#names + 1] = thread.name end
+        add("\n|cffffd100Part of|r\n" .. table.concat(names, ", "))
+    end
+
+    -- Observations, not conclusions. Each line is something the client
+    -- showed you, offered so you can decide whether it means anything.
+    local observations = AC.Index.ObservationsForQuest(questId)
+    if #observations > 0 then
+        add("\n|cffffd100Things the Chronicle noticed|r")
+        for _, observation in ipairs(observations) do
+            add("  " .. observation.detail)
+        end
+        add("|cff999999These are observations, not conclusions. The client never"
+            .. " says which quests belong to one story.|r")
+    end
+
     ShowDetailMode(table.concat(lines, "\n"))
+
+    ShowActionButton("Add to thread", function()
+        detailStack = {}
+        PushDetail(function() RenderThreadPicker(questId) end)
+    end)
 end
 
-local function RenderNpcDetail(npcKey)
+function RenderNpcDetail(npcKey)
     local index = AC.Index.Get()
     local npc = index.npcs[npcKey]
     if not npc then return end
@@ -271,7 +311,7 @@ local function RenderNpcDetail(npcKey)
     ShowDetailMode(table.concat(lines, "\n"))
 end
 
-local function RenderZoneDetail(zoneName)
+function RenderZoneDetail(zoneName)
     local index = AC.Index.Get()
     local zone = index.zones[zoneName]
     if not zone then return end
@@ -481,6 +521,160 @@ function Render.places()
     LayoutRows(count)
 end
 
+-- Thread views. Threads are the player's own groupings, so nothing here
+-- ever adds a quest on its own; suggestions are offered and chosen.
+
+function RenderThreadDetail(threadId)
+    local thread = AC.Threads and AC.Threads.Get(threadId)
+    if not thread then return end
+
+    ShowListMode()
+    SetHeader(thread.name, "Threads")
+    HideActionButton()
+
+    local index = AC.Index.Get()
+    local count = 0
+    local function addRow(title, detail, onClick)
+        count = count + 1
+        local row = AcquireRow(count)
+        row.title:SetText(title)
+        row.detail:SetText(detail or "")
+        row:SetScript("OnClick", onClick)
+        row:EnableMouse(onClick ~= nil)
+    end
+
+    local questIds = AC.Threads.QuestIds(threadId)
+
+    if #questIds == 0 then
+        addRow("Nothing in this thread yet",
+            "Open a quest and use Add to thread, or take a suggestion below.")
+    end
+
+    for _, questId in ipairs(questIds) do
+        local quest = index.quests[questId]
+        local title = (quest and quest.title) or ("Quest " .. questId)
+        local detail = quest and (STATE_LABEL[quest.state] or "") or ""
+        if quest and quest.giverName then
+            detail = detail .. "  |  from " .. quest.giverName
+        end
+        addRow(title, detail, function()
+            detailStack = {}
+            PushDetail(function() RenderQuestDetail(questId) end)
+        end)
+    end
+
+    local suggestions = AC.Index.SuggestionsForThread(threadId)
+    if #suggestions > 0 then
+        addRow("|cffffd100Suggested, because of something observed|r",
+            "Nothing is added unless you choose it.")
+
+        for _, suggestion in ipairs(suggestions) do
+            local quest = suggestion.quest
+            addRow("  + " .. (quest.title or ("Quest " .. quest.id)),
+                suggestion.because,
+                function()
+                    AC.Threads.AddQuest(threadId, quest.id)
+                    RenderThreadDetail(threadId)
+                end)
+        end
+    end
+
+    LayoutRows(count)
+end
+
+-- Shown when a quest is open and the player chooses Add to thread. Reuses
+-- the row list rather than introducing a dropdown, so picking a thread
+-- works the same way as everything else in the pane.
+function RenderThreadPicker(questId)
+    ShowListMode()
+    HideActionButton()
+
+    local index = AC.Index.Get()
+    local quest = index.quests[questId]
+    SetHeader("Add to thread", quest and quest.title or nil)
+
+    local count = 0
+    local function addRow(title, detail, onClick)
+        count = count + 1
+        local row = AcquireRow(count)
+        row.title:SetText(title)
+        row.detail:SetText(detail or "")
+        row:SetScript("OnClick", onClick)
+        row:EnableMouse(onClick ~= nil)
+    end
+
+    addRow("|cff55ff55New thread...|r", "Name a story and start it with this quest.",
+        function()
+            if StaticPopup_Show then
+                StaticPopup_Show("AZEROTH_CHRONICLE_NEW_THREAD", nil, nil, { questId = questId })
+            end
+        end)
+
+    for _, thread in ipairs(AC.Threads.All()) do
+        local already = AC.Threads.Contains(thread.id, questId)
+        local memberCount = #AC.Threads.QuestIds(thread.id)
+        addRow(thread.name,
+            already and "already in this thread"
+                or (memberCount .. (memberCount == 1 and " quest" or " quests")),
+            (not already) and function()
+                AC.Threads.AddQuest(thread.id, questId)
+                detailStack = {}
+                PushDetail(function() RenderQuestDetail(questId) end)
+            end or nil)
+    end
+
+    LayoutRows(count)
+end
+
+function Render.threads()
+    ShowListMode()
+    SetHeader("Threads")
+    HideActionButton()
+
+    local count = 0
+    local function addRow(title, detail, onClick)
+        count = count + 1
+        local row = AcquireRow(count)
+        row.title:SetText(title)
+        row.detail:SetText(detail or "")
+        row:SetScript("OnClick", onClick)
+        row:EnableMouse(onClick ~= nil)
+    end
+
+    local threads = AC.Threads and AC.Threads.All() or {}
+
+    if #threads == 0 then
+        addRow("No threads yet",
+            "The client never says which quests belong to one story, so you "
+            .. "decide. Open a quest and use Add to thread.")
+    end
+
+    for _, thread in ipairs(threads) do
+        local questIds = AC.Threads.QuestIds(thread.id)
+        local active = 0
+        local index = AC.Index.Get()
+        for _, questId in ipairs(questIds) do
+            local quest = index.quests[questId]
+            if quest and quest.state == "active" then active = active + 1 end
+        end
+
+        -- Deliberately never says "finished". We cannot know whether a
+        -- story has more chapters, and claiming closure would be a lie.
+        local state = (active > 0)
+            and ("|cffffcc00" .. active .. " still open|r")
+            or "|cff999999quiet for now|r"
+
+        addRow(thread.name,
+            #questIds .. (#questIds == 1 and " quest" or " quests") .. "  |  " .. state,
+            function()
+                detailStack = {}
+                PushDetail(function() RenderThreadDetail(thread.id) end)
+            end)
+    end
+
+    LayoutRows(count)
+end
+
 function Render.search()
     ShowListMode()
 
@@ -621,6 +815,13 @@ local function BuildFrame()
     back:SetText("Back")
     back:SetScript("OnClick", GoBack)
 
+    -- Context action for whatever is open. Hidden by default, so a view
+    -- that does not set one cannot inherit the previous view's button.
+    actionButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    actionButton:SetSize(140, 22)
+    actionButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -34, 14)
+    actionButton:Hide()
+
     -- Always visible, not just on the search view: the question it answers
     -- ("where do I know that name from") arrives while reading something
     -- else, and hiding the box behind a tab would add a step to the one
@@ -679,6 +880,61 @@ end
 -- ============================================================
 -- Public entry points
 -- ============================================================
+
+-- Naming a thread needs a text prompt, and Blizzard's own popup is the
+-- native way to ask for one rather than building a bespoke dialog.
+StaticPopupDialogs = StaticPopupDialogs or {}
+StaticPopupDialogs["AZEROTH_CHRONICLE_NEW_THREAD"] = {
+    text = "Name this story thread",
+    button1 = ACCEPT or "Accept",
+    button2 = CANCEL or "Cancel",
+    hasEditBox = true,
+    maxLetters = 60,
+    timeout = 0,
+    whileDead = true,
+    hideOnEscape = true,
+    preferredIndex = 3,
+
+    OnShow = function(self)
+        if self.editBox then
+            self.editBox:SetText("")
+            self.editBox:SetFocus()
+        end
+    end,
+
+    OnAccept = function(self, data)
+        local name = self.editBox and self.editBox:GetText() or ""
+        local threadId = AC.Threads and AC.Threads.Create(name)
+        if not threadId then return end
+
+        if data and data.questId then
+            AC.Threads.AddQuest(threadId, data.questId)
+        end
+        AC.Journal.ShowThread(threadId)
+    end,
+
+    EditBoxOnEnterPressed = function(self)
+        local parent = self:GetParent()
+        if parent and parent.button1 and parent.button1:IsEnabled() then
+            local dialog = StaticPopupDialogs["AZEROTH_CHRONICLE_NEW_THREAD"]
+            dialog.OnAccept(parent, parent.data)
+        end
+        if parent then parent:Hide() end
+    end,
+
+    EditBoxOnEscapePressed = function(self)
+        local parent = self:GetParent()
+        if parent then parent:Hide() end
+    end,
+}
+
+function AC.Journal.ShowThread(threadId)
+    if not frame then BuildFrame() end
+    currentView = "threads"
+    detailStack = {}
+    PushDetail(function() RenderThreadDetail(threadId) end)
+    frame:Show()
+end
 
 function AC.Journal.Show(viewKey)
     if not frame then BuildFrame() end

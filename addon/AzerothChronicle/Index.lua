@@ -181,6 +181,33 @@ local function AddDialogue(list, entry)
     list[#list + 1] = entry
 end
 
+-- A timestamped record of what an NPC was offering each time we looked.
+-- Comparing consecutive entries is what makes "they started offering this
+-- after you turned that in" an observation rather than a guess.
+--
+-- An empty offer list is recorded too, and matters most: it is the evidence
+-- that they had nothing before.
+local function RecordOffers(npc, timestamp, availableQuests)
+    if not npc or not timestamp then return end
+
+    local offers = {}
+    for _, entry in ipairs(availableQuests or {}) do
+        if type(entry) == "table" then
+            local questId = entry.questID or entry.questId
+            local title = entry.title or entry.name
+            if questId then
+                offers[questId] = title or ("Quest " .. tostring(questId))
+            end
+        end
+    end
+
+    npc.offerHistory = npc.offerHistory or {}
+    npc.offerHistory[#npc.offerHistory + 1] = {
+        timestamp = timestamp,
+        offers = offers,
+    }
+end
+
 local function Build()
     local db = AzerothChronicleDB
     if not db or not db.events then
@@ -314,6 +341,7 @@ local function Build()
                         kind = "greeting", text = greeting.text, timestamp = timestamp,
                     })
                 end
+                RecordOffers(npc, timestamp, greeting.availableQuests)
             end
 
         elseif eventType == "GOSSIP_SHOW" then
@@ -325,6 +353,7 @@ local function Build()
                         kind = "gossip", text = gossip.text, timestamp = timestamp,
                     })
                 end
+                RecordOffers(npc, timestamp, gossip.availableQuests)
             end
 
         elseif eventType == "QUEST_LOG_SNAPSHOT" then
@@ -482,6 +511,156 @@ function AC.Index.ZonesByRecency()
         return (a.lastSeenAt or 0) > (b.lastSeenAt or 0)
     end)
     return list
+end
+
+-- ============================================================
+-- Observations
+--
+-- Not inference. Each of these is something the client actually showed the
+-- player, recorded with the evidence that justifies it, and offered only as
+-- a suggestion for a thread the player assembles themselves.
+--
+-- Prerequisites are not discoverable: the client never says that one quest
+-- required another. What is discoverable is that a quest's own text pointed
+-- you at someone, or that someone started offering work they were not
+-- offering before.
+-- ============================================================
+
+local MIN_NAME_LENGTH = 4
+
+-- The game announces cross-NPC handoffs in prose: "report to Marshal
+-- Dughan in Goldshire". Matching known character names against captured
+-- quest text turns that sentence into a link whose evidence is quotable,
+-- and both sides are people and words the player actually encountered.
+local function ReferralObservations(index, quest)
+    local observations = {}
+    if not quest then return observations end
+
+    local haystacks = {
+        { label = "its closing words", text = quest.completionText },
+        { label = "its objectives", text = quest.objectivesText },
+        { label = "the request itself", text = quest.description },
+    }
+
+    local seen = {}
+
+    for _, npcKey in ipairs(index.npcOrder) do
+        local npc = index.npcs[npcKey]
+        local name = npc.name
+
+        -- Skip the giver: being named in your own quest is not a referral.
+        if name and #name >= MIN_NAME_LENGTH and npcKey ~= quest.giverKey then
+            for _, haystack in ipairs(haystacks) do
+                if haystack.text and haystack.text:find(name, 1, true) and not seen[npcKey] then
+                    seen[npcKey] = true
+                    observations[#observations + 1] = {
+                        kind = "referral",
+                        npcKey = npcKey,
+                        npcName = name,
+                        where = haystack.label,
+                        detail = haystack.label .. " named " .. name,
+                    }
+                end
+            end
+        end
+    end
+
+    return observations
+end
+
+-- If someone was offering nothing and later offers work, something changed
+-- in between. That is a genuine observation with a timestamp, though it
+-- only exists when the player happened to speak to them beforehand.
+local function NewOfferObservations(index, quest)
+    local observations = {}
+    if not quest or not quest.turnedInAt then return observations end
+
+    for _, npcKey in ipairs(index.npcOrder) do
+        local npc = index.npcs[npcKey]
+        local history = npc.offerHistory
+        if history and #history > 1 then
+            for i = 2, #history do
+                local previous, current = history[i - 1], history[i]
+                if current.timestamp and current.timestamp >= quest.turnedInAt
+                    and previous.timestamp and previous.timestamp <= quest.turnedInAt then
+                    for questId, title in pairs(current.offers) do
+                        if not previous.offers[questId] and questId ~= quest.id then
+                            observations[#observations + 1] = {
+                                kind = "new_offer",
+                                npcKey = npcKey,
+                                npcName = npc.name,
+                                questId = questId,
+                                questTitle = title,
+                                detail = (npc.name or "someone")
+                                    .. " began offering \"" .. tostring(title)
+                                    .. "\" after you turned this in",
+                            }
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return observations
+end
+
+function AC.Index.ObservationsForQuest(questId)
+    local index = AC.Index.Get()
+    local quest = index.quests[questId]
+    if not quest then return {} end
+
+    local observations = ReferralObservations(index, quest)
+    for _, observation in ipairs(NewOfferObservations(index, quest)) do
+        observations[#observations + 1] = observation
+    end
+    return observations
+end
+
+-- Quests worth considering for a thread, based on observations from the
+-- quests already in it. Suggestions only; nothing is added automatically.
+function AC.Index.SuggestionsForThread(threadId)
+    if not AC.Threads then return {} end
+
+    local index = AC.Index.Get()
+    local memberIds = AC.Threads.QuestIds(threadId)
+    local isMember = {}
+    for _, questId in ipairs(memberIds) do isMember[questId] = true end
+
+    local suggestions, seen = {}, {}
+
+    for _, questId in ipairs(memberIds) do
+        for _, observation in ipairs(AC.Index.ObservationsForQuest(questId)) do
+            local candidates = {}
+
+            if observation.kind == "new_offer" and observation.questId then
+                candidates[#candidates + 1] = observation.questId
+            elseif observation.kind == "referral" then
+                -- A referral names a person, so the candidates are the
+                -- quests that person gave you.
+                local npc = index.npcs[observation.npcKey]
+                if npc then
+                    for givenId in pairs(npc.questsGiven) do
+                        candidates[#candidates + 1] = givenId
+                    end
+                end
+            end
+
+            for _, candidateId in ipairs(candidates) do
+                if not isMember[candidateId] and not seen[candidateId]
+                    and index.quests[candidateId] then
+                    seen[candidateId] = true
+                    suggestions[#suggestions + 1] = {
+                        quest = index.quests[candidateId],
+                        because = observation.detail,
+                        fromQuest = index.quests[questId],
+                    }
+                end
+            end
+        end
+    end
+
+    return suggestions
 end
 
 -- ============================================================
