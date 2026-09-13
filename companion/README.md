@@ -172,6 +172,47 @@ past `[[ ]]` if the text itself contains a closing sequence) rather than assumin
 short-string escaping is enough. Tested against exactly that: quotes, backslashes,
 and embedded `]]` sequences all round-trip correctly.
 
+## Running it automatically: the background app
+
+`recap` and `publish` above are commands you run by hand after a session. For
+running unattended - like WarcraftLogs' uploader client - there's a background
+app that watches for new play and recaps it on its own, with no command to
+remember:
+
+```text
+pip install pystray Pillow          # only for this app; the CLI needs neither
+python companion/watcher_app.py
+```
+
+It polls for SavedVariables changes, imports, and once a play session is
+**closed** (not the one still growing - either a later session already exists,
+or enough time has passed that you've plausibly logged off for the day),
+recaps and publishes it automatically. A system tray icon shows it's alive
+(green while watching, amber if Ollama isn't reachable, red on an unexpected
+error) with a right-click menu for "Recap now" and "Quit". Logs go to
+`~/.azeroth-chronicle/watcher.log`.
+
+To build it as a standalone `.exe` that needs no Python installed at all
+(handy for giving this to a friend, per the spec's "shareable, but not SaaS"
+principle):
+
+```text
+pip install pyinstaller
+python companion/build_exe.py
+```
+
+Produces `companion/dist/AzerothChronicleCompanion.exe`. Verified during
+development against the real WoW installation and a real local model: it
+launches, discovers the game, imports, generates a genuine recap, and
+publishes it, all without a console window. What was not verified is
+anything requiring an actual click on the tray icon - that needs a real
+desktop session, which automated testing here does not have.
+
+`pystray`, `Pillow`, and `pyinstaller` are the one deliberate exception to
+this project's stdlib-only rule, used only by this app and its build step;
+`run.py` and every library module still need nothing installed. See
+`CLAUDE.md` if you're touching any of this.
+
 ## Not built yet
 
 Export/import for moving history between machines, and a way to feed threads

@@ -174,8 +174,16 @@ def _upsert_character(conn, character):
         '   race = COALESCE(excluded.race, characters.race),'
         '   faction = COALESCE(excluded.faction, characters.faction),'
         # Level only ever moves up, and an older file must not walk it back.
-        '   level_last_seen = MAX(COALESCE(characters.level_last_seen, 0),'
-        '                         COALESCE(excluded.level_last_seen, 0))',
+        # A plain MAX(COALESCE(...,0), COALESCE(...,0)) looks equivalent but
+        # is not: once anything triggers an UPDATE, it silently turns "level
+        # never observed" (NULL) into "level 0 observed" (0), which is a
+        # false claim, not a default. This CASE only takes MAX once both
+        # sides genuinely have a value; NULL on both sides stays NULL.
+        '   level_last_seen = CASE'
+        '     WHEN characters.level_last_seen IS NULL THEN excluded.level_last_seen'
+        '     WHEN excluded.level_last_seen IS NULL THEN characters.level_last_seen'
+        '     ELSE MAX(characters.level_last_seen, excluded.level_last_seen)'
+        '   END',
         (guid, character.get('name'), character.get('realm'), character.get('class'),
          character.get('race'), character.get('faction'),
          _as_int(character.get('level')), int(time.time())))

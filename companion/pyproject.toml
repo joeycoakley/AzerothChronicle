@@ -4,10 +4,15 @@ version = "0.1.0"
 description = "Import and query a personal, spoiler-safe World of Warcraft lore journal."
 requires-python = ">=3.9"
 
-# Genuinely nothing is required, including the recap. It talks to a local
-# Ollama server over plain HTTP via the standard library, never a hosted
-# API, so there is no optional-dependency group to install.
+# The CLI, import, and every library module are genuinely stdlib-only,
+# including the recap - it talks to a local Ollama server over plain HTTP.
 dependencies = []
+
+[project.optional-dependencies]
+# Needed only to run or build the packaged background app (watcher_app.py),
+# for its system tray icon. This is the project's one deliberate, documented
+# exception to stdlib-only - see CLAUDE.md. The CLI never imports either.
+app = ["pystray>=0.19", "Pillow>=10", "pyinstaller>=6"]
 
 [project.scripts]
 azeroth-chronicle = "azeroth_chronicle.cli:main"

@@ -74,6 +74,35 @@ def find_play_sessions(conn, gap_seconds=DEFAULT_GAP_SECONDS):
     return sessions
 
 
+def find_closed_sessions(conn, gap_seconds=DEFAULT_GAP_SECONDS, now=None):
+    """Sessions safe to recap: ones that cannot grow any more.
+
+    Exists for the watcher, which reacts to a file changing rather than to
+    the player explicitly saying "I'm done." A session is closed once either
+    a later session already exists (so nothing more can be appended to it),
+    or enough wall-clock time has passed since its last event that a further
+    reload adding to it is no longer plausible - the same gap rule that
+    splits sessions in the first place, just measured against the clock
+    instead of only against events that already happened.
+
+    Without the second condition, the most recent session would never be
+    recapped until the player did something else entirely, which for
+    someone who plays once and logs off for the night is never.
+    """
+    import time as time_module
+
+    now = now if now is not None else time_module.time()
+    sessions = find_play_sessions(conn, gap_seconds)
+    if not sessions:
+        return []
+
+    closed = sessions[:-1]
+    last = sessions[-1]
+    if last.end is not None and (now - last.end) > gap_seconds:
+        closed.append(last)
+    return closed
+
+
 def _quests_in_window(conn, start, end):
     """Quests the player touched during the window, with their full text.
 

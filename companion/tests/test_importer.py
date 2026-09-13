@@ -37,6 +37,62 @@ class ImporterTestCase(unittest.TestCase):
         return db_module.table_counts(conn or self.conn)
 
 
+class TestCharacterUpsert(ImporterTestCase):
+    """A regression caught by the watcher's very first test: reimporting a
+    character with no level in the payload must not turn "never observed"
+    into "observed as zero". The bug was in the SQL, not the caller - a
+    MAX(COALESCE(x,0), COALESCE(y,0)) looks like it preserves unknowns but
+    actually manufactures a false zero the moment any update happens.
+    """
+
+    def test_missing_level_stays_null_on_first_import(self):
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+            'events': [],
+        })
+        row = self.conn.execute(
+            'SELECT level_last_seen FROM characters').fetchone()
+        self.assertIsNone(row['level_last_seen'])
+
+    def test_missing_level_stays_null_across_reimports(self):
+        payload = {'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},
+                  'events': []}
+        importer.ingest_events(self.conn, payload)
+        importer.ingest_events(self.conn, payload)  # the update path, not insert
+
+        row = self.conn.execute(
+            'SELECT level_last_seen FROM characters').fetchone()
+        self.assertIsNone(row['level_last_seen'],
+                         'reimporting with no new level data must not fabricate 0')
+
+    def test_a_real_level_is_still_recorded_and_only_moves_up(self):
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R', 'level': 5},
+            'events': [],
+        })
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R', 'level': 3},
+            'events': [],
+        })
+        row = self.conn.execute(
+            'SELECT level_last_seen FROM characters').fetchone()
+        self.assertEqual(row['level_last_seen'], 5, 'an older, lower level must not walk it back')
+
+    def test_a_known_level_survives_a_capture_that_omits_it(self):
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R', 'level': 7},
+            'events': [],
+        })
+        importer.ingest_events(self.conn, {
+            'character': {'guid': 'Player-1-A', 'name': 'Tester', 'realm': 'R'},  # no level
+            'events': [],
+        })
+        row = self.conn.execute(
+            'SELECT level_last_seen FROM characters').fetchone()
+        self.assertEqual(row['level_last_seen'], 7,
+                         'a later capture missing the field must not erase a known level')
+
+
 class TestIdempotency(ImporterTestCase):
     def test_repeat_import_inserts_nothing_new(self):
         first = importer.import_file(self.conn, FIXTURE)

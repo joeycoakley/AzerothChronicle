@@ -222,16 +222,15 @@ def cmd_recap(args):
         return 1
 
     session = ordered[args.session - 1]
-    text, event_ids, stats = context_module.build_recap_context(
-        conn, session, max_quests=args.max_quests)
-
-    print('Play session: %s' % _format_window(session.start, session.end))
-    print('Drawn from %d events: %d quests, %d characters.'
-          % (stats['events'], stats['quests'], stats['npcs']))
-    print()
 
     if args.dry_run:
         # The whole point of the spoiler promise is that it can be checked.
+        text, event_ids, stats = context_module.build_recap_context(
+            conn, session, max_quests=args.max_quests)
+        print('Play session: %s' % _format_window(session.start, session.end))
+        print('Drawn from %d events: %d quests, %d characters.'
+              % (stats['events'], stats['quests'], stats['npcs']))
+        print()
         print('--- exactly what would be sent, and nothing else ---')
         print(text)
         print('--- end ---')
@@ -239,51 +238,36 @@ def cmd_recap(args):
         return 0
 
     from . import llm
+    from . import recap as recap_module
 
-    digest = context_module.context_hash(text)
-    cached = conn.execute(
-        'SELECT text, model FROM summaries WHERE context_hash = ?', (digest,)
-    ).fetchone()
+    print('Play session: %s' % _format_window(session.start, session.end))
 
-    if cached and not args.force:
-        print(cached['text'])
-        print('\n(unchanged since the last recap, so it was not regenerated;'
-              ' use --force to redo it)')
-        return 0
-
-    print('Generating locally with %s. This can take a minute or two on'
-          ' modest hardware; nothing is sent over the network.' % llm.MODEL)
+    def announce_generation():
+        print('Generating locally with %s. This can take a minute or two'
+              ' on modest hardware; nothing is sent over the network.' % llm.MODEL)
 
     try:
-        result = llm.summarize(text)
+        outcome = recap_module.generate_and_save_recap(
+            conn, session, max_quests=args.max_quests, force=args.force,
+            save=not args.no_save, on_will_generate=announce_generation)
     except llm.LlmUnavailable as exc:
         print(exc)
         return 1
 
-    print(result['text'])
+    print('Drawn from %d events: %d quests, %d characters.\n'
+          % (outcome.stats['events'], outcome.stats['quests'], outcome.stats['npcs']))
+    print(outcome.text)
 
-    if not args.no_save:
-        import json as json_module
-        import time as time_module
-        character = conn.execute('SELECT character_id FROM characters LIMIT 1').fetchone()
-        conn.execute(
-            'INSERT OR REPLACE INTO summaries ('
-            ' summary_id, character_id, kind, window_start, window_end, model,'
-            ' created_at, context_hash, text, source_event_ids_json'
-            ') VALUES (?,?,?,?,?,?,?,?,?,?)',
-            ('recap-%s' % digest,
-             character['character_id'] if character else None,
-             'session_recap', session.start, session.end, result['model'],
-             int(time_module.time()), digest, result['text'],
-             json_module.dumps(event_ids)))
-        conn.commit()
-
-        if not args.no_publish:
-            _publish_to_game(conn, args)
-
-    if result['input_tokens']:
+    if outcome.cached:
+        print('\n(unchanged since the last recap, so it was not regenerated;'
+              ' use --force to redo it)')
+    elif outcome.input_tokens:
         print('\n(%s, %s tokens in, %s out)'
-              % (result['model'], result['input_tokens'], result['output_tokens']))
+              % (outcome.model, outcome.input_tokens, outcome.output_tokens))
+
+    if not args.no_save and not outcome.cached and not args.no_publish:
+        _publish_to_game(conn, args)
+
     return 0
 
 

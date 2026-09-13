@@ -31,6 +31,15 @@ companion/*.db
 *.sqlite3
 *.db
 
+# Companion watcher log - can contain event ids and character info
+watcher.log
+watcher.log.*
+
+# PyInstaller build output - large, reproducible via companion/build_exe.py
+companion/build/
+companion/dist/
+companion/*.spec
+
 # Secrets
 .env
 *.env

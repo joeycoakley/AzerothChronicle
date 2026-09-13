@@ -164,6 +164,11 @@ recap appears only after your next login or `/reload`, never mid-session).
 Enable that addon once on the character-select screen, then find your recaps
 under the Recaps tab in the journal pane.
 
+Running `recap` by hand after every session is optional busywork -
+[companion/README.md](companion/README.md#running-it-automatically-the-background-app)
+covers a background app (`watcher_app.py`, or a packaged `.exe` needing no
+Python at all) that watches for new play and recaps it on its own.
+
 Importing twice inserts nothing the second time, and deleting the database loses
 nothing, because SQLite here is a rebuildable index over the raw journal rather
 than the journal itself. See [companion/README.md](companion/README.md).

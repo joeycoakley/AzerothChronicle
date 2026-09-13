@@ -6,10 +6,32 @@ importing again must produce the same result, which is the property
 Milestone 4 is actually about.
 """
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
-MIGRATIONS_DIR = Path(__file__).resolve().parent.parent.parent / 'migrations'
+
+def _default_migrations_dir():
+    """Where migrations/*.sql live, in source and once packaged alike.
+
+    In a normal checkout, that is three levels up from this file
+    (src/azeroth_chronicle/db.py -> companion/migrations). Inside a
+    PyInstaller onefile build, __file__ instead resolves somewhere under
+    the bootloader's temporary extraction directory, and walking up from
+    there lands nowhere real - migrations/*.sql are data files, never
+    analyzed as Python imports, so they only exist in the bundle at all
+    because the build step explicitly adds them at the path this function
+    expects. PyInstaller sets sys._MEIPASS to that extraction root at
+    runtime; that is the one reliable anchor for a frozen build, and
+    __file__-relative climbing is the one reliable anchor for a source
+    checkout, so the correct base depends on which one is running.
+    """
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        return Path(sys._MEIPASS) / 'migrations'
+    return Path(__file__).resolve().parent.parent.parent / 'migrations'
+
+
+MIGRATIONS_DIR = _default_migrations_dir()
 
 DEFAULT_DB_NAME = 'chronicle.sqlite3'
 

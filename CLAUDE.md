@@ -63,6 +63,19 @@ style preferences.
 - **Never truncate silently.** Say what was left out.
 - **Distinguish "not observed" from "did not happen."** `known_from_snapshot`
   and `known_complete` exist for exactly this.
+- **NULL must survive an update that carries no new information.** A real bug:
+  `_upsert_character`'s "level only moves up" SQL used to be
+  `MAX(COALESCE(a,0), COALESCE(b,0))`, which looks like it preserves an
+  unknown level but actually manufactures a false `0` the moment any
+  re-import happens, even one with no level data at all - "never observed"
+  silently became "observed as zero". It never showed up against real
+  captures (the addon always sends a level), only once the watcher started
+  reimporting the same character repeatedly in a test. Fixed with a `CASE`
+  that only takes `MAX` once both sides genuinely have a value (see
+  `TestCharacterUpsert` in `test_importer.py`). The general lesson: a
+  COALESCE-to-a-default inside an aggregate over two nullable columns is a
+  common way to accidentally turn "unknown" into "known" - check any new one
+  the same way before trusting it.
 
 ## Before you write addon Lua
 
@@ -112,10 +125,36 @@ cost a debugging round.
 
 ## Before you write companion Python
 
-- **Stdlib only. No exceptions, including the recap.** `llm.py` talks to a
-  local Ollama server over plain HTTP via `urllib.request`, never a hosted API.
-  Do not add a pip dependency for this or anything else. If a future feature
-  seems to need one, that is a decision to raise, not to make silently.
+- **Stdlib only for the CLI and every library module, with exactly one
+  documented exception.** `llm.py` talks to a local Ollama server over plain
+  HTTP via `urllib.request` - no dependency there. The one exception is
+  `watcher_app.py` (the packaged background app), which needs `pystray` +
+  `Pillow` for its tray icon and has no other way to show it's alive or offer
+  a normal way to quit. That dependency is declared in the `app` extra in
+  `pyproject.toml` and used nowhere else - `run.py`, `cli.py`, and every
+  module under `src/azeroth_chronicle/` besides the tray glue in
+  `watcher_app.py` itself must keep working with nothing installed. If a
+  future feature seems to need a new dependency, that is a decision to raise
+  explicitly, not to make silently by importing something.
+- **PyInstaller is a build-time tool, not a runtime dependency.** It produces
+  `AzerothChronicleCompanion.exe` (via `companion/build_exe.py`) and is never
+  imported by anything the exe runs. Don't confuse it with the pystray/Pillow
+  exception above - installing it does not relax the stdlib-only rule for
+  library code, it just builds the one artifact that bundles pystray/Pillow
+  so an end user needs no Python at all (spec section 2.5, "shareable, but
+  not SaaS").
+- **A frozen build's `__file__` does not point where you think.** `db.py`'s
+  migrations directory is computed differently depending on whether
+  `sys.frozen` is set, because PyInstaller extracts the app to a temp
+  directory at runtime and `__file__`-relative climbing lands nowhere real
+  there. This cost a real build failure during development
+  (`_default_migrations_dir` in `db.py` is the fix, and `build_exe.py`'s
+  `--add-data` flag is the other half - both must agree on the bundled
+  path). If you add another file the app reads off disk at runtime that
+  is not a `.py` module (another data file, a template, anything under
+  `migrations/`), it needs the same frozen-aware treatment and an
+  `--add-data` entry, or it will work in dev and silently not exist once
+  packaged.
 - **The recap model runs locally, on purpose, not as a placeholder for a cloud
   model.** The user does not want to pay per token, and a local model fits the
   project's own local-first design better than any hosted one: no key, no
@@ -169,6 +208,42 @@ so rather than implying you tested it.
   reasoning behind a non-obvious choice, because that is what a future reader
   needs. Look at `git log` before writing one.
 
+## Before you touch the watcher (`watcher.py`, `watcher_app.py`)
+
+- **`recap.py` is the single place that decides "has this session already
+  been recapped."** It answers that by content hash, not by a separate
+  tracking table: an identical assembled context means an identical hash,
+  which is a cache hit regardless of who's asking. Both the CLI's `recap`
+  command and the watcher call `recap.generate_and_save_recap` for exactly
+  this reason - a second implementation would risk answering the question
+  differently and either double-generating or missing a session.
+- **A session is "closed" (safe to recap) when either a later session already
+  exists, or enough wall-clock time has passed since its last event.** See
+  `context.find_closed_sessions`. The second condition matters as much as the
+  first: without it, whichever session is most recent never gets recapped
+  until the player does something else entirely, which for someone who plays
+  once and logs off is never. Do not recap the open (most recent, still
+  growing) session on a mere file-change trigger - that wastes a full local
+  generation on a session that will just grow again.
+- **One `run_once` pass can and should recap more than one closed session** if
+  more than one became eligible since the last pass (e.g. the app was closed
+  for a few days). Publish once at the end covering all of them, not once per
+  session - publishing is a full rewrite of the generated addon from the
+  whole `summaries` table, so doing it per-session is wasted, identical work.
+- **`run_once` must not raise.** A bad SavedVariables parse, a local model
+  that isn't running, an unexpected exception - none of it should be able to
+  stop `run_forever`'s loop. A background app that silently stops watching
+  after one bad pass is worse than one that logs the failure and keeps
+  polling. `PassResult` exists so a caller (the tray app, or a test) can see
+  what happened without the pass needing to throw to report it.
+- **I cannot test the tray icon, the menu, or any actual click.** Those need
+  a real desktop session. What was verified: the packaged `.exe` launches,
+  runs a real pass against the real WoW installation and a real local model,
+  writes correct log output, and the process was killed by PID rather than
+  by clicking Quit - the graceful `stop_event.set(); icon.stop()` path in
+  `quit_app` is plausible-looking code, not something I confirmed executes
+  correctly. Say so; don't imply more than that was checked.
+
 ## Current priorities
 
 WoW Forever beta opens 2026-09-17, launch 2026-11-04. It is Classic-plus, built
@@ -181,6 +256,13 @@ existence. Until the beta client is in hand:
   Forever's flavour folder name.
 - `docs/beta-validation-checklist.md` is the day-one procedure and the record of
   what has been confirmed. Update it when you learn something about the client.
+
+The recap/watcher/packaged-app work (`recap.py`, `watcher.py`, `watcher_app.py`,
+`publish.py`) was built ahead of the beta as an explicit, user-directed
+exception to "capture completeness beats features," not a signal that the
+priority order changed generally. Treat further feature requests the same
+way: build them if asked, but capture validation is still what actually needs
+the remaining time before Thursday.
 
 ## Do not
 
