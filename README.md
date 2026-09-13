@@ -1,22 +1,23 @@
 # Azeroth Chronicle
 
 A personal, spoiler-safe lore journal for World of Warcraft. An addon records the
-quests, NPCs, dialogue, books, and world events you actually encounter; a local
-companion (later) turns that raw history into recaps and answers.
+quests, NPCs, dialogue, books, and world events you actually encounter, and a
+local companion turns that raw history into recaps and answers.
 
 The full design lives in [docs/development-spec.md](docs/development-spec.md).
 
-**Current status: V0 capture harness.** The addon is written and ready for its
-first in-game validation run. The companion has not been started yet, by design
-(spec section 38: do not start with SQLite or the LLM).
+**Current status: capture validated, importer working.** The addon captures a
+full quest lifecycle on Classic Era 1.15.9, and the companion imports it into
+SQLite. Milestones 0 through 4 pass. No language model yet, which is Milestone 5.
 
 ## Repository layout
 
 ```text
 addon/AzerothChronicle/   The WoW addon (V0 is Core.lua plus the TOC)
-companion/                Python companion - V1, not yet implemented
+companion/                Python companion: import, query, rebuild
 docs/                     Development spec and validation checklists
-samples/savedvariables/   Sanitized capture samples for companion development
+samples/savedvariables/   Sanitized capture used as the companion test fixture
+tools/                    Lua lint and the SavedVariables sanitizer
 ```
 
 ## What V0 captures
@@ -111,6 +112,26 @@ The short version:
 3. Turn it in, talk to a few NPCs, read a book, listen for NPC yells.
 4. `/reload`, then `/ac stats` to confirm counts survived the write.
 5. Open the SavedVariables file and confirm the events reconstruct the interaction.
+
+## Companion
+
+Imports the journal into a local SQLite index. Stdlib only, nothing to install.
+
+```text
+python companion/run.py import --wow-path "<your WoW folder>"
+python companion/run.py quests
+python companion/run.py show 456
+```
+
+Importing twice inserts nothing the second time, and deleting the database loses
+nothing, because SQLite here is a rebuildable index over the raw journal rather
+than the journal itself. See [companion/README.md](companion/README.md).
+
+Run its tests with:
+
+```text
+python -m unittest discover -s companion/tests
+```
 
 ## Privacy
 
