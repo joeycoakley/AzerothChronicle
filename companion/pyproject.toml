@@ -4,13 +4,10 @@ version = "0.1.0"
 description = "Import and query a personal, spoiler-safe World of Warcraft lore journal."
 requires-python = ">=3.9"
 
-# Nothing is required. Import, status, quests, show and rebuild all run on a
-# stock Python, which is what local-first should mean in practice.
+# Genuinely nothing is required, including the recap. It talks to a local
+# Ollama server over plain HTTP via the standard library, never a hosted
+# API, so there is no optional-dependency group to install.
 dependencies = []
-
-[project.optional-dependencies]
-# Only the recap feature talks to a network, and only if you ask it to.
-ai = ["anthropic>=1.0"]
 
 [project.scripts]
 azeroth-chronicle = "azeroth_chronicle.cli:main"

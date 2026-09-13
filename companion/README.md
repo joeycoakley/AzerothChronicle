@@ -91,11 +91,13 @@ suite passes on a machine with no WoW installed.
 
 ## Recaps
 
-The only feature that touches a network, and the only one with a dependency.
+Runs against a local model through [Ollama](https://ollama.com), reached over
+plain HTTP with the standard library. No pip package, no API key, no per-token
+cost, and no game text ever leaves the machine, not even to a cloud provider.
 
 ```text
-pip install anthropic
-setx ANTHROPIC_API_KEY "..."        # or: ant auth login
+winget install Ollama.Ollama
+ollama pull qwen2.5:7b-instruct
 
 python companion/run.py sessions
 python companion/run.py recap --dry-run
@@ -111,17 +113,32 @@ text that would be sent and sends nothing. The spoiler promise is that the model
 only ever sees what the character encountered, and a privacy claim you cannot
 inspect is worth very little. Two things enforce it: retrieval decides what can
 be known, and the system prompt forbids filling gaps from the model's own
-knowledge of Warcraft. Both are needed.
+knowledge of Warcraft. Both are needed, and both were checked against a real
+recap during development: every proper noun the model used traced back to
+captured quest text, not the model's own training.
+
+That check also surfaced the honest tradeoff of a small local model: it
+correctly used only captured text, but blurred two separate quests from
+different NPCs into one paragraph where a larger model would likely have kept
+them apart. Free and private costs some coherence on modest hardware. Read the
+output, don't just trust it.
+
+Generation is slow relative to a cloud API: a few minutes rather than a few
+seconds on a modest GPU, since a 7B model only partially offloads on 6GB of
+VRAM. That is the cost of nothing ever leaving the machine.
 
 Every recap stores the ids of the events it was built from, so a summary can be
 audited against its sources and regenerated later with a better model. Identical
-input is not billed twice; pass `--force` to override that.
+input is not regenerated unless you pass `--force`.
 
-Without the package or a key, recaps explain what is missing and everything else
-keeps working.
+The model is configurable without touching code: `AZEROTH_CHRONICLE_MODEL` picks
+a different Ollama tag, `OLLAMA_HOST` points at a different server. Without
+Ollama running, recaps explain what is missing and everything else keeps
+working.
 
 ## Not built yet
 
-Milestone 5 and the rest of V1: storyline inference, retrieval, the language
-model integration, and the "catch me up" recap. Also absent by design are quest
-relationships and any external lore. Nothing here reaches the network.
+Export/import for moving history between machines, and a way to feed threads
+(the hand-grouped story annotations) into a recap's context alongside the raw
+quest data. Also absent by design: any external lore, and any network call
+other than to localhost.

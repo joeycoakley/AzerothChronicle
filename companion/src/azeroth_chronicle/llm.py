@@ -1,25 +1,51 @@
-"""The only part of this project that touches the network.
+"""The only part of this project that talks to a model, and it never leaves
+the machine.
 
-Import, query and the journal pane all work with nothing installed and no
-account. This module is the single optional dependency, imported lazily so
-that a missing package or a missing key degrades exactly one feature instead
-of breaking the tool.
+Recaps run against a local Ollama server (https://ollama.com), reached over
+plain HTTP with the standard library. No pip package, no API key, no per-
+token cost, no game text ever crossing the network. That makes this module
+consistent with the rest of the companion rather than an exception to it:
+import, query, and the journal pane were already local-first, and now the
+recap is too.
+
+The tradeoff, stated plainly: a small local model writes noticeably weaker
+prose than a large hosted one, and generation takes on the order of a
+minute rather than a few seconds, since most of this project's development
+hardware only partially offloads a 7B model to its GPU. Nothing here hides
+that; it is what "free and private" costs on modest hardware.
 
 The system prompt below is load-bearing, not decoration. The context handed
 to the model contains only what the player encountered, and the instruction
 tells the model to stay inside it. Both halves are needed: retrieval decides
 what can be known, the instruction stops the model filling gaps from its own
 knowledge of Warcraft. For a player discovering a new game's story slowly,
-an invented detail is worse than no summary at all.
+an invented detail is worse than no summary at all. A small local model
+follows this instruction less reliably than a large one, so read the output
+against the source context rather than trusting it outright.
 """
+import json
+import os
+import urllib.error
+import urllib.request
 
-# Sonnet rather than Opus: a recap is prose over a small, already-structured
-# context (see context.py), not multi-step reasoning, so it doesn't need
-# Opus's extra headroom, and Sonnet 5 costs under half as much per token.
-MODEL = 'claude-sonnet-5'
+# Overridable via environment, matching Ollama's own OLLAMA_HOST convention
+# for the host and a project-specific variable for the model, so switching
+# models never requires editing code.
+DEFAULT_BASE_URL = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
+if not DEFAULT_BASE_URL.startswith('http'):
+    # OLLAMA_HOST is sometimes just "host:port"; the server needs a scheme.
+    DEFAULT_BASE_URL = 'http://' + DEFAULT_BASE_URL
 
-# Recaps are short by design, so this cap is deliberate rather than careless.
-MAX_TOKENS = 2000
+MODEL = os.environ.get('AZEROTH_CHRONICLE_MODEL', 'qwen2.5:7b-instruct')
+
+# Local generation is slow on modest hardware. Cold model load alone ran
+# past a minute during development; a few hundred output tokens on top of
+# that needs real headroom, not a cloud-API-sized timeout.
+REQUEST_TIMEOUT_SECONDS = 600
+
+# Recaps are short by design, so this cap is deliberate rather than careless,
+# and it also bounds how long a slow local model spends generating.
+MAX_OUTPUT_TOKENS = 800
 
 SYSTEM_PROMPT = """You write a personal chronicle for a World of Warcraft player, \
 recapping what their character just did.
@@ -51,71 +77,79 @@ class LlmUnavailable(Exception):
     """Raised when the feature cannot run, with an actionable message."""
 
 
-class LlmRefused(Exception):
-    """The model declined to answer this request."""
+def _post(base_url, path, payload):
+    data = json.dumps(payload).encode('utf-8')
+    request = urllib.request.Request(
+        base_url.rstrip('/') + path, data=data,
+        headers={'Content-Type': 'application/json'}, method='POST')
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode('utf-8'))
 
 
-def _client():
+def is_available(base_url=None):
+    """Whether an Ollama server is actually reachable right now."""
     try:
-        import anthropic
-    except ImportError:
+        request = urllib.request.Request((base_url or DEFAULT_BASE_URL) + '/api/version')
+        with urllib.request.urlopen(request, timeout=3):
+            return True
+    except Exception:
+        return False
+
+
+def summarize(context_text, system_prompt=None, model=None, base_url=None,
+             max_output_tokens=MAX_OUTPUT_TOKENS):
+    """Send one context to the local model and return the recap text."""
+    base_url = base_url or DEFAULT_BASE_URL
+    model = model or MODEL
+
+    if not is_available(base_url):
         raise LlmUnavailable(
-            'The recap feature needs the anthropic package, which is the only\n'
-            'dependency in this project.\n\n'
-            '    pip install anthropic\n\n'
-            'Everything else (import, status, quests, show) works without it.')
+            'Could not reach a local model server at %s.\n\n'
+            'Install Ollama (https://ollama.com) if you have not, then make sure\n'
+            'it is running. On Windows it starts automatically after install and\n'
+            'runs in the background; if it is not, start the Ollama app or run:\n\n'
+            '    ollama serve\n\n'
+            'Nothing here ever needs a paid API key or sends your journal over\n'
+            'the network.' % base_url)
 
     try:
-        return anthropic.Anthropic()
-    except Exception as exc:
+        response = _post(base_url, '/api/chat', {
+            'model': model,
+            'messages': [
+                {'role': 'system', 'content': system_prompt or SYSTEM_PROMPT},
+                {'role': 'user', 'content': 'Recap this stretch of play.\n\n' + context_text},
+            ],
+            'stream': False,
+            'options': {'num_predict': max_output_tokens},
+        })
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode('utf-8', 'replace')
+        if exc.code == 404:
+            raise LlmUnavailable(
+                'Model "%s" is not pulled yet. Run:\n\n    ollama pull %s'
+                % (model, model))
+        raise LlmUnavailable('The local model server returned an error: %s' % body)
+    except urllib.error.URLError as exc:
         raise LlmUnavailable(
-            'Could not create an API client: %s\n\n'
-            'Set ANTHROPIC_API_KEY, or sign in with `ant auth login`.\n'
-            'The key is never written to the addon or to your journal.' % exc)
+            'Could not reach the local model server: %s\n\n'
+            'It answered a moment ago and may have been stopped mid-request.'
+            % exc.reason)
+    except TimeoutError:
+        raise LlmUnavailable(
+            'The local model did not respond within %d seconds. A cold model'
+            ' load or a long context can take a while on modest hardware; try'
+            ' again, or pass --max-quests to shrink the context.'
+            % REQUEST_TIMEOUT_SECONDS)
 
-
-def summarize(context_text, system_prompt=None, model=MODEL, max_tokens=MAX_TOKENS):
-    """Send one context to the model and return the recap text.
-
-    No server-side fallback here: the documented "default" form is only
-    demonstrated with claude-opus-5 as the requesting model, and recap
-    content (fantasy quest text) carries essentially no policy-refusal risk
-    in the first place, so the beta parameter isn't worth wiring against an
-    unconfirmed model pairing. A refusal, if it ever happens, is surfaced
-    below rather than silently retried.
-    """
-    client = _client()
-
-    try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system_prompt or SYSTEM_PROMPT,
-            messages=[{
-                'role': 'user',
-                'content': 'Recap this stretch of play.\n\n' + context_text,
-            }],
-        )
-    except Exception as exc:
-        # Anything from the network down to a bad key lands here. The point
-        # is that a recap failure never takes the rest of the tool with it.
-        raise LlmUnavailable('The request failed: %s' % exc)
-
-    if response.stop_reason == 'refusal':
-        detail = ''
-        if getattr(response, 'stop_details', None):
-            detail = ' (%s)' % response.stop_details.category
-        raise LlmRefused('The model declined to write this recap%s.' % detail)
-
-    parts = [block.text for block in response.content if block.type == 'text']
-    text = '\n'.join(parts).strip()
-
+    text = ((response.get('message') or {}).get('content') or '').strip()
     if not text:
         raise LlmUnavailable('The model returned no text.')
 
     return {
         'text': text,
-        'model': response.model,
-        'input_tokens': getattr(response.usage, 'input_tokens', None),
-        'output_tokens': getattr(response.usage, 'output_tokens', None),
+        'model': response.get('model', model),
+        # Ollama's own token-ish counters; close enough for a rough cost/
+        # length readout, not billed against anything since this is local.
+        'input_tokens': response.get('prompt_eval_count'),
+        'output_tokens': response.get('eval_count'),
     }

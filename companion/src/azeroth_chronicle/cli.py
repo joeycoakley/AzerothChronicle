@@ -251,9 +251,12 @@ def cmd_recap(args):
               ' use --force to redo it)')
         return 0
 
+    print('Generating locally with %s. This can take a minute or two on'
+          ' modest hardware; nothing is sent over the network.' % llm.MODEL)
+
     try:
         result = llm.summarize(text)
-    except (llm.LlmUnavailable, llm.LlmRefused) as exc:
+    except llm.LlmUnavailable as exc:
         print(exc)
         return 1
 

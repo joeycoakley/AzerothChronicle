@@ -92,9 +92,26 @@ cost a debugging round.
 
 ## Before you write companion Python
 
-- **Stdlib only, except the recap.** `anthropic` is the single optional
-  dependency, imported lazily. Import, status, quests, show and rebuild must run
-  on a stock Python with nothing installed. Do not add dependencies.
+- **Stdlib only. No exceptions, including the recap.** `llm.py` talks to a
+  local Ollama server over plain HTTP via `urllib.request`, never a hosted API.
+  Do not add a pip dependency for this or anything else. If a future feature
+  seems to need one, that is a decision to raise, not to make silently.
+- **The recap model runs locally, on purpose, not as a placeholder for a cloud
+  model.** The user does not want to pay per token, and a local model fits the
+  project's own local-first design better than any hosted one: no key, no
+  network call leaving the machine, no bill, ever. Do not "upgrade" this to a
+  paid API by default. If a future feature genuinely needs more reasoning than
+  a small local model can give, that is a conversation to have explicitly, not
+  a silent swap back to a cloud provider.
+- **The default model is `qwen2.5:7b-instruct`** (env var
+  `AZEROTH_CHRONICLE_MODEL` overrides it), chosen for the project's own
+  development hardware (16GB RAM, a 6GB-VRAM GPU). It was verified end to end
+  against real captured play: every proper noun in a real recap traced back to
+  captured quest text, not the model's training data, but it also blurred two
+  separate quests from different NPCs into one paragraph. A small local model
+  follows the spoiler-boundary instruction correctly but with less coherence
+  than a large one. That tradeoff is accepted and documented, not a bug to fix
+  by switching providers.
 - **Tests run against the committed fixture**, never a live game, so the suite
   passes on a machine with no WoW.
 - **Schema changes are migrations.** Add `companion/migrations/00N_name.sql`.
@@ -103,18 +120,6 @@ cost a debugging round.
 - **Never commit an unsanitized capture.** Use
   `tools/sanitize-savedvariables.py`, which refuses to write if identity
   survives. No character names, realms, GUIDs or account ids in the repo.
-- **The recap model is `claude-sonnet-5`, deliberately, in `llm.py`.** A recap is
-  prose over a small, already-structured context (see `context.py`), not
-  multi-step reasoning, so it doesn't need Opus's headroom, and Sonnet costs
-  under half as much per token. Don't "upgrade" this to Opus by default; if a
-  future feature genuinely needs more reasoning, decide per-feature, not by
-  bumping the whole file.
-- **No server-side refusal fallback is wired.** The documented `fallbacks:
-  "default"` form is only demonstrated with `claude-opus-5` as the requesting
-  model, and recap content (fantasy quest text) carries essentially no
-  policy-refusal risk, so it isn't worth wiring against an unconfirmed model
-  pairing. A refusal, if it ever happens, surfaces as `LlmRefused` instead of
-  being silently retried.
 
 ## Commands
 
@@ -168,4 +173,9 @@ existence. Until the beta client is in hand:
 - Replace captured text with a paraphrase in the UI. Lists are navigation; the
   original wording is always one click away.
 - Put an API key anywhere near the addon.
+- Reintroduce a paid or hosted LLM API as the recap's default. The user
+  explicitly does not want to pay per token; the local Ollama path was chosen
+  for that reason and fits the project's local-first design besides. A cloud
+  provider is a fine thing to support as an opt-in choice someone configures,
+  never the thing that runs when nobody set anything up.
 - Claim something was verified in-game. You cannot run the client.
