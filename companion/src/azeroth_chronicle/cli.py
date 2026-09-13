@@ -278,10 +278,38 @@ def cmd_recap(args):
              json_module.dumps(event_ids)))
         conn.commit()
 
+        if not args.no_publish:
+            _publish_to_game(conn, args)
+
     if result['input_tokens']:
         print('\n(%s, %s tokens in, %s out)'
               % (result['model'], result['input_tokens'], result['output_tokens']))
     return 0
+
+
+def _publish_to_game(conn, args):
+    """Shared by `recap` (auto-publish) and the standalone `publish` command."""
+    from . import publish as publish_module
+
+    targets = publish_module.publish(conn, wow_path=getattr(args, 'wow_path', None))
+    if targets:
+        print('\nPublished to the game. Log in or /reload to see it in the'
+              ' journal pane, under Recaps.')
+        for target in targets:
+            print('  %s' % (target / publish_module.ADDON_NAME))
+    else:
+        print('\nCould not publish: no WoW installation with the'
+              ' AzerothChronicle addon was found.'
+              ' Pass --wow-path if it is somewhere nonstandard.')
+    return targets
+
+
+def cmd_publish(args):
+    """Stand-alone republish, for when the addon file was lost or the game
+    moved, without regenerating (and re-spending time on) every recap."""
+    conn = _open(args)
+    targets = _publish_to_game(conn, args)
+    return 0 if targets else 1
 
 
 def cmd_rebuild(args):
@@ -341,9 +369,17 @@ def build_parser():
                    help='regenerate even if an identical recap already exists')
     p.add_argument('--no-save', action='store_true',
                    help='do not store the result')
+    p.add_argument('--no-publish', action='store_true',
+                   help='do not write it into the game as a generated addon')
+    p.add_argument('--wow-path', help='World of Warcraft installation folder')
     p.add_argument('--max-quests', type=int, default=None,
                    help='cap how many quests go into the context')
     p.set_defaults(func=cmd_recap)
+
+    p = sub.add_parser('publish',
+                       help='write stored recaps into the game as a generated addon')
+    p.add_argument('--wow-path', help='World of Warcraft installation folder')
+    p.set_defaults(func=cmd_publish)
 
     p = sub.add_parser('rebuild', help='rebuild derived tables from raw events')
     p.set_defaults(func=cmd_rebuild)

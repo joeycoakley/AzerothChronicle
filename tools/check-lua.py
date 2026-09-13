@@ -46,19 +46,50 @@ SANDBOX_BLOCKED = {
 }
 
 
+_LONG_BRACKET_OPEN = re.compile(r'\[(=*)\[')
+
+
+def _match_long_bracket(src, i):
+    """If a long-bracket opener ([[, [=[, [==[, ...) starts at i, return the
+    position just past its matching closer, else None.
+
+    This is the piece the linter was missing: it recognized `--[[ ]]` as a
+    comment but not a standalone `[[ ]]` string literal at any `=` level.
+    Lua's own long-string level can escalate arbitrarily (the generated-addon
+    publisher does exactly this to survive a `]]` inside recap prose), so
+    matching only the bare `[[` / `]]` case would silently miscount any
+    higher level and, worse, treat ordinary English words inside the string
+    ("for", "end", "do", "then" are all common prose words) as real
+    keywords - which is exactly the false failure this fixes.
+    """
+    match = _LONG_BRACKET_OPEN.match(src, i)
+    if not match:
+        return None
+    level = len(match.group(1))
+    closer = ']' + '=' * level + ']'
+    end = src.find(closer, match.end())
+    return len(src) if end == -1 else end + len(closer)
+
+
 def strip_comments_and_strings(src):
     """Blank out comments and string literals so keyword scanning is honest."""
     out = []
     i, n = 0, len(src)
     while i < n:
         if src[i:i + 2] == '--':
-            if src[i + 2:i + 4] == '[[':
-                end = src.find(']]', i + 4)
-                i = n if end == -1 else end + 2
+            long_end = _match_long_bracket(src, i + 2)
+            if long_end is not None:
+                i = long_end
             else:
                 end = src.find('\n', i)
                 i = n if end == -1 else end
             continue
+
+        long_end = _match_long_bracket(src, i)
+        if long_end is not None:
+            i = long_end
+            continue
+
         ch = src[i]
         if ch in ('"', "'"):
             quote, i = ch, i + 1

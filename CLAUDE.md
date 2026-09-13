@@ -34,6 +34,17 @@ Breaking one of these is a design change, not a refactor.
 6. **No external lore, ever, without an explicit opt-in that does not yet
    exist.** `companion/src/azeroth_chronicle/context.py` is the spoiler
    boundary. Anything reaching a model goes through it.
+7. **The generated recaps addon is one-way and disposable.** The companion
+   writes `AzerothChronicleSummaries` (see `publish.py`) as the only channel
+   that gets model output into the game — SavedVariables cannot be used for
+   this, because the client owns that file and overwrites it wholesale on
+   every reload (spec section 4), discarding anything written there in
+   between. Nothing reads this generated addon back; it is rewritten from
+   the `summaries` table on every publish, never hand-edited, and its data
+   is never treated as an observation or an annotation. A recap only becomes
+   visible after the next login or `/reload` — the addon sandbox has no other
+   moment where it reads files at all. State that limitation; don't imply
+   the pane updates live.
 
 ## Honesty rules
 
@@ -78,6 +89,15 @@ cost a debugging round.
 - **Forward references resolve to nil globals.** A local called above its
   declaration is not an error in Lua; it fails at runtime, silently. Forward
   declare at the top of the file. The linter checks this.
+- **Generating Lua from arbitrary text (recap prose) needs a long-bracket
+  string, escalated past `[[ ]]` if the text itself contains a closing
+  sequence** (see `_lua_long_bracket` in `publish.py`), not quoted-string
+  escaping. This also broke the linter itself: its structure checker didn't
+  know about `[[ ]]` as a string literal (only as a `--[[` comment), so an
+  ordinary English "for" or "end" inside recap prose counted as a real
+  keyword and produced a false "unclosed block". Fixed once, in
+  `tools/check-lua.py`'s `strip_comments_and_strings`; if you touch that
+  function, keep the `prose_with_keywords`-style regression in mind.
 - **`math.randomseed` is not exposed.** Nor `os.*`, `io.*`, `require`,
   `loadstring`. The linter has the list.
 - **WoW hides Lua errors by default.** Wrap handlers and report through

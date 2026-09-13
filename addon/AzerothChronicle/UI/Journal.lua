@@ -43,6 +43,7 @@ local VIEWS = {
     { key = "characters", label = "Characters" },
     { key = "places", label = "Places" },
     { key = "threads", label = "Threads" },
+    { key = "recaps", label = "Recaps" },
     { key = "search", label = "Search" },
 }
 
@@ -674,6 +675,86 @@ function Render.threads()
                 detailStack = {}
                 PushDetail(function() RenderThreadDetail(thread.id) end)
             end)
+    end
+
+    LayoutRows(count)
+end
+
+local function RenderRecapDetail(recap)
+    ShowListMode()
+
+    local when
+    if recap.windowStart and recap.windowEnd then
+        when = FormatTimestamp(recap.windowStart) .. "  to  " .. FormatTimestamp(recap.windowEnd)
+    end
+    SetHeader("Recap", when)
+
+    local lines = {}
+    local function add(text) lines[#lines + 1] = text end
+
+    add(recap.text or "")
+
+    if recap.model then
+        add("\n|cff999999written by " .. recap.model .. "|r")
+    end
+
+    ShowDetailMode(table.concat(lines, "\n"))
+end
+
+-- A recap only exists once the companion has generated one and published it
+-- into the game, which only takes effect on the next login or /reload - the
+-- client reads addon files at those two moments only, never mid-session.
+-- Every empty state below says which of those steps is missing, since
+-- "no recaps" and "the bridge addon is not installed" need different fixes.
+function Render.recaps()
+    ShowListMode()
+    SetHeader("Recaps")
+    HideActionButton()
+
+    local count = 0
+    local function addRow(title, detail, onClick)
+        count = count + 1
+        local row = AcquireRow(count)
+        row.title:SetText(title)
+        row.detail:SetText(detail or "")
+        row:SetScript("OnClick", onClick)
+        row:EnableMouse(onClick ~= nil)
+    end
+
+    if not (AC.Summaries and AC.Summaries.IsAddonPresent and AC.Summaries.IsAddonPresent()) then
+        addRow("No recaps addon detected",
+            "Run `python companion/run.py recap` from the companion, which"
+            .. " publishes into the game automatically. Then enable"
+            .. " \"Azeroth Chronicle Summaries\" on the character-select"
+            .. " addon list and log in.")
+        LayoutRows(count)
+        return
+    end
+
+    local recaps = AC.Summaries.ForCurrentCharacter()
+
+    if #recaps == 0 then
+        addRow("No recaps yet for this character",
+            "Run `python companion/run.py recap` after a play session, then"
+            .. " log in or /reload to see it here.")
+        LayoutRows(count)
+        return
+    end
+
+    for _, recap in ipairs(recaps) do
+        local when = "unknown time"
+        if recap.windowStart and recap.windowEnd then
+            when = FormatTimestamp(recap.windowStart) .. " to " .. FormatTimestamp(recap.windowEnd)
+        end
+        local preview = (recap.text or ""):gsub("\n", " ")
+        if #preview > 90 then
+            preview = preview:sub(1, 90) .. "..."
+        end
+
+        addRow(when, preview, function()
+            detailStack = {}
+            PushDetail(function() RenderRecapDetail(recap) end)
+        end)
     end
 
     LayoutRows(count)

@@ -69,6 +69,33 @@ def find_saved_variables(wow_path=None):
     return unique
 
 
+def find_addon_installations(wow_path=None, addon_name='AzerothChronicle'):
+    """Every `Interface/AddOns` directory where the named addon is installed.
+
+    Used to publish generated content (recaps) as a sibling addon. Anchoring
+    on the main addon's own presence, rather than just any flavor folder that
+    exists, means publishing only ever targets an installation the user
+    actually set up for this project, and never guesses at one it should not
+    touch.
+    """
+    if wow_path:
+        roots = [Path(wow_path)]
+    else:
+        roots = candidate_roots()
+
+    found = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        search_dirs = [root] + [root / flavor for flavor in FLAVORS]
+        for directory in search_dirs:
+            addons_dir = directory / 'Interface' / 'AddOns'
+            if (addons_dir / addon_name).is_dir():
+                found.append(addons_dir)
+
+    return sorted({p.resolve() for p in found})
+
+
 def describe(path):
     """Pull character and realm out of the SavedVariables path itself.
 

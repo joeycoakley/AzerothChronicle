@@ -136,6 +136,42 @@ a different Ollama tag, `OLLAMA_HOST` points at a different server. Without
 Ollama running, recaps explain what is missing and everything else keeps
 working.
 
+## Getting a recap into the game
+
+The addon sandbox cannot make network calls or read arbitrary files, so the
+companion cannot hand a recap to the addon directly. SavedVariables looks like
+an obvious bridge and is not: the client owns that file and rewrites it
+wholesale from memory on every reload, so anything the companion wrote there
+would just be overwritten (spec section 4).
+
+The bridge that actually works is a second addon whose Lua *is* the data.
+`recap` writes one automatically, called `AzerothChronicleSummaries`, right
+alongside the main addon:
+
+```text
+python companion/run.py publish              # (re)write it without regenerating
+python companion/run.py recap --no-publish   # generate only, skip this step
+```
+
+It is found by locating wherever `AzerothChronicle` itself is installed, never
+by guessing at a WoW folder, and it is rewritten from the `summaries` table
+every time, so it is exactly as disposable as every other derived thing in
+this project. Enable "Azeroth Chronicle Summaries" once on the character-select
+addon list, like any other addon.
+
+**The real limitation, stated rather than hidden: a recap only appears after
+your next login or `/reload`, never mid-session.** That is the only time the
+client reads addon files at all. Playing, then generating a recap, then
+opening the pane in the same session shows nothing new until you reload;
+that reload is also what makes the recap visible, so it costs you nothing
+beyond doing it once.
+
+Generated Lua is written from arbitrary model text, so it wraps every recap in
+a Lua long-bracket string sized to whatever the text actually contains (widening
+past `[[ ]]` if the text itself contains a closing sequence) rather than assuming
+short-string escaping is enough. Tested against exactly that: quotes, backslashes,
+and embedded `]]` sequences all round-trip correctly.
+
 ## Not built yet
 
 Export/import for moving history between machines, and a way to feed threads

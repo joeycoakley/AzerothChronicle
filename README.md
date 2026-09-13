@@ -155,6 +155,15 @@ python companion/run.py recap --dry-run   # prints exactly what would be sent
 python companion/run.py recap             # generates it, locally, for free
 ```
 
+By default `recap` also publishes into the game as a small, separate,
+generated addon (`AzerothChronicleSummaries`) that the client loads as
+ordinary code. The addon sandbox cannot make network calls, so this is the
+only bridge that actually works in this direction; see
+[companion/README.md](companion/README.md) for why and what it costs (a
+recap appears only after your next login or `/reload`, never mid-session).
+Enable that addon once on the character-select screen, then find your recaps
+under the Recaps tab in the journal pane.
+
 Importing twice inserts nothing the second time, and deleting the database loses
 nothing, because SQLite here is a rebuildable index over the raw journal rather
 than the journal itself. See [companion/README.md](companion/README.md).
