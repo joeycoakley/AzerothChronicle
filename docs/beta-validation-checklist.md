@@ -25,6 +25,8 @@ Settled on Classic Era. Re-verify each against Forever when that client exists.
 | Quest description newlines | preserved as `\n\n` through Lua serialization |
 | Legacy gossip globals | `GetGossipText` and friends are absent; C_GossipInfo is the only gossip path |
 | Required API coverage | 19 of 19 resolved on build 69722 |
+| QUEST_TURNED_IN payload | carries id, xp and money only, no title; join on quest id |
+| Quest text personalization | the client substitutes the player name into quest and completion text |
 | Session id format in practice | `20260913T155600Z-7f4f` |
 
 The map API mistake is the one worth remembering. A wrapper guarded by
@@ -44,7 +46,7 @@ when the data looks thin.
 | Addon appears in the character-select addon list | yes |
 | Addon prints its load message on login | yes |
 | `/ac status` prints a session id | yes |
-| `/reload` persists events to disk | yes, 5 events and 1 session written |
+| `/reload` persists events to disk | yes, 8 events across sessions |
 
 An empty `events` table on disk alongside a non-zero `/ac status` count does not
 mean capture failed. WoW writes SavedVariables only on reload, logout,
@@ -69,11 +71,11 @@ is done) exercises `QUEST_PROGRESS`, which otherwise never fires.
 | QUEST_ACCEPTED argument 2 present | yes, the quest id |
 | QUEST_PROGRESS fires | yes |
 | Progress text available (`GetProgressText`) | yes |
-| QUEST_COMPLETE fires | not yet exercised |
-| Completion/reward text available (`GetRewardText`) | not yet exercised |
-| QUEST_TURNED_IN fires | not yet exercised |
-| XP reward argument present | not yet exercised |
-| Money reward argument present | not yet exercised |
+| QUEST_COMPLETE fires | yes |
+| Completion/reward text available (`GetRewardText`) | yes |
+| QUEST_TURNED_IN fires | yes |
+| XP reward argument present | yes, 170 |
+| Money reward argument present | yes, 35 copper |
 
 Repeated QUEST_PROGRESS events are expected and were observed twice with
 identical text, because progress dialogue re-fires each time you talk to the
@@ -113,23 +115,21 @@ and quest letters. Further afield, the bookshelves in Stormwind Keep's library.
 | Map ID available (`C_Map.GetBestMapForUnit`) | yes, 1438 for Teldrassil |
 | Player coordinates available (`C_Map.GetPlayerMapPosition`) | yes, normalized 0-1 (observed 0.587, 0.443) |
 | Coordinates nil indoors or in instances? | not yet exercised |
+| Position present on real captured events | yes, every event carries mapId, subZone, x, y |
 
 ## Milestone acceptance
 
 - [x] Milestone 0: addon loads, SavedVariables initializes, `/ac status` works.
 - [x] Milestone 1: quest 456 produced an event with id, quest id, title, full quest text, objectives, NPC name and GUID, timestamp, zone, and session metadata.
-- [ ] Milestone 2: detail, accepted, and progress captured. Complete and turned-in still needed.
+- [x] Milestone 2: quest 456 produced all five lifecycle events, including completion text and the XP and money rewards.
 - [ ] Milestone 3: gossip captured. Readable book and world dialogue still needed.
 
 ## Next session
 
-1. Finish quest 456 and turn it in, to close out Milestone 2. This is the
-   only remaining path that exercises `GetRewardText` and the XP and money
-   reward arguments.
-2. Read a book or sign, and catch an NPC say or yell, to close out Milestone 3.
-3. Talk to a quest giver with an unaccepted quest, so gossip options and
+1. Read a book or sign, and catch an NPC say or yell, to close out Milestone 3.
+2. Talk to a quest giver with an unaccepted quest, so gossip options and
    available quests come back populated rather than empty.
-4. Step indoors and check whether coordinates go nil, since the companion
+3. Step indoors and check whether coordinates go nil, since the companion
    must treat a missing position as normal rather than as corrupt data.
 
 ## After the run

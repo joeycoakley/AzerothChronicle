@@ -795,16 +795,6 @@ end)
 -- Slash commands (spec section 23)
 -- ============================================================
 
-local function CountEventsByType(eventType)
-    local count = 0
-    for _, evt in ipairs(AzerothChronicleDB.events) do
-        if evt.type == eventType then
-            count = count + 1
-        end
-    end
-    return count
-end
-
 local function CountEventsThisSession()
     local count = 0
     for _, evt in ipairs(AzerothChronicleDB.events) do
@@ -825,20 +815,32 @@ local function PrintStatus()
     AC.Debug.Print("Debug: " .. tostring(db.settings.debug) .. "  Discovery: " .. tostring(db.settings.discovery))
 end
 
+-- Report every registered event type, including the ones sitting at zero.
+--
+-- Summarizing only a couple of quest stages hid exactly the thing being
+-- validated: whether QUEST_COMPLETE fired. A stage that is missing has to
+-- be visible as a zero, because an absent line reads as "fine" while a
+-- zero reads as "not captured yet", and only one of those is true.
 local function PrintStats()
-    AC.Debug.Print("Quests captured (detail): " .. CountEventsByType("QUEST_DETAIL"))
-    AC.Debug.Print("Quests turned in: " .. CountEventsByType("QUEST_TURNED_IN"))
-    AC.Debug.Print("Gossip entries: " .. CountEventsByType("GOSSIP_SHOW"))
-    AC.Debug.Print("Item/book text entries: " .. CountEventsByType("ITEM_TEXT_READY"))
+    local counts = {}
+    for _, evt in ipairs(AzerothChronicleDB.events) do
+        counts[evt.type] = (counts[evt.type] or 0) + 1
+    end
+
+    AC.Debug.Print("Quest lifecycle:")
+    for _, evt in ipairs(QUEST_EVENTS) do
+        AC.Debug.Print(string.format("  %-18s %d", evt, counts[evt] or 0))
+    end
+
+    AC.Debug.Print("Gossip entries: " .. (counts["GOSSIP_SHOW"] or 0))
+    AC.Debug.Print("Item/book text entries: " .. (counts["ITEM_TEXT_READY"] or 0))
 
     local dialogueCount = 0
-    for _, evt in ipairs(AzerothChronicleDB.events) do
-        if evt.type == "CHAT_MSG_MONSTER_SAY" or evt.type == "CHAT_MSG_MONSTER_YELL"
-            or evt.type == "CHAT_MSG_MONSTER_EMOTE" or evt.type == "CHAT_MSG_MONSTER_WHISPER" then
-            dialogueCount = dialogueCount + 1
-        end
+    for _, evt in ipairs(DIALOGUE_EVENTS) do
+        dialogueCount = dialogueCount + (counts[evt] or 0)
     end
     AC.Debug.Print("World dialogue: " .. dialogueCount)
+    AC.Debug.Print("Total events recorded: " .. #AzerothChronicleDB.events)
 end
 
 local function PrintApis()
