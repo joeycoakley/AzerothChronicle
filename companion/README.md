@@ -172,6 +172,57 @@ past `[[ ]]` if the text itself contains a closing sequence) rather than assumin
 short-string escaping is enough. Tested against exactly that: quotes, backslashes,
 and embedded `]]` sequences all round-trip correctly.
 
+## The chronicle: your character's whole story, one chapter per place
+
+A session recap answers "what did I just do." The chronicle answers a
+different question: "what has my character's whole story been so far, from
+the beginning." It writes one chapter per zone you have visited, in the order
+you first arrived, using the exact same generated-addon bridge described
+above (`kind = 'zone_chapter'` in the same `summaries` table as recaps).
+
+```text
+python companion/run.py chapters                      # list zones and their status
+python companion/run.py chronicle --zone "Teldrassil" --dry-run
+python companion/run.py chronicle                      # write or update every zone
+```
+
+A chapter is a genuinely different kind of row from a session recap, not just
+a longer one. A session is closed and immutable, so two different sessions
+always get two different rows. A zone is the opposite - you will very likely
+go back and do more there weeks later - so a chapter has **one stable row per
+zone that updates in place** as more happens there, rather than a growing
+pile of "Teldrassil" entries. Re-running `chronicle` after more play is
+expected and cheap: a zone with nothing new is a cache hit, and only zones
+that actually changed spend model time. `--force` regenerates regardless.
+
+Chapters draw from every quest and conversation tied to that zone across the
+character's whole history, not one play session's worth, so the context is
+larger and takes longer: budget several minutes per zone, not one. `--zone`
+updates a single zone if you don't want to wait through every one.
+
+**Read the output. This is the part of the project where a small local model
+shows its limits most plainly.** During development, real generated chapters:
+
+- used Markdown headers despite an explicit instruction not to - fixed with a
+  defensive strip applied to everything the model returns (`_strip_markdown`
+  in `llm.py`), since relying on the instruction alone was not enough;
+- persistently closed with a generic "ready for whatever comes next"
+  flourish despite two different rewrites of the instruction against it -
+  this is stylistic noise, not an actual spoiler (it never names anything
+  specific), and was left as a known, accepted limitation rather than chased
+  further;
+- once described an NPC with a detail invented rather than drawn from
+  captured text ("a young druid apprentice," unsupported by anything in her
+  captured dialogue). This is the one that matters most, since it is a real
+  instance of the exact failure this whole project exists to prevent, not
+  just a style tic.
+
+None of this makes the chronicle useless - the factual backbone (which
+quests, which NPCs, what was said, in what order) was accurate throughout.
+It means what recaps already meant: this is prose written by a small model
+running for free on modest hardware, worth reading with that in mind, not
+worth mistaking for a definitive account.
+
 ## Running it automatically: the background app
 
 `recap` and `publish` above are commands you run by hand after a session. For

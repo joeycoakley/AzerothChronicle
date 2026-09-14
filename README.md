@@ -164,6 +164,19 @@ recap appears only after your next login or `/reload`, never mid-session).
 Enable that addon once on the character-select screen, then find your recaps
 under the Recaps tab in the journal pane.
 
+There's also a full chronicle: one chapter per zone, oldest first, covering
+your character's whole story rather than one session at a time, in the
+Chronicle tab.
+
+```text
+python companion/run.py chronicle
+```
+
+Read the honest quality notes in
+[companion/README.md](companion/README.md#the-chronicle-your-characters-whole-story-one-chapter-per-place)
+before trusting it outright - a small local model shows its limits here more
+than it does in a short recap.
+
 Running `recap` by hand after every session is optional busywork -
 [companion/README.md](companion/README.md#running-it-automatically-the-background-app)
 covers a background app (`watcher_app.py`, or a packaged `.exe` needing no

@@ -131,6 +131,12 @@ def build_data_file(rows_by_character, generated_at=None):
             lines.append('["windowEnd"] = %s,' % _lua_number(row['window_end']))
             lines.append('["model"] = %s,' % _lua_string(row['model']))
             lines.append('["createdAt"] = %s,' % _lua_number(row['created_at']))
+            # NULL for every session_recap row; only zone_chapter rows carry
+            # a place name, which is the addon's only reliable way to title
+            # a chapter without parsing generated prose to guess one.
+            zone = row['zone'] if 'zone' in row.keys() else None
+            if zone:
+                lines.append('["zone"] = %s,' % _lua_string(zone))
             lines.append('["text"] = %s,' % _lua_long_bracket(row['text']))
             lines.append('},')
         lines.append('},')
@@ -163,7 +169,7 @@ def publish(conn, wow_path=None, addon_name='AzerothChronicle'):
     rows_by_character = {}
     for row in conn.execute(
             'SELECT summary_id, character_id, kind, window_start, window_end,'
-            '       model, created_at, text FROM summaries'
+            '       model, created_at, text, zone FROM summaries'
             ' WHERE character_id IS NOT NULL'):
         rows_by_character.setdefault(row['character_id'], []).append(row)
 

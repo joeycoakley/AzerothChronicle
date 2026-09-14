@@ -278,7 +278,7 @@ def _publish_to_game(conn, args):
     targets = publish_module.publish(conn, wow_path=getattr(args, 'wow_path', None))
     if targets:
         print('\nPublished to the game. Log in or /reload to see it in the'
-              ' journal pane, under Recaps.')
+              ' journal pane, under Recaps or Chronicle.')
         for target in targets:
             print('  %s' % (target / publish_module.ADDON_NAME))
     else:
@@ -294,6 +294,93 @@ def cmd_publish(args):
     conn = _open(args)
     targets = _publish_to_game(conn, args)
     return 0 if targets else 1
+
+
+def cmd_chapters(args):
+    """List zones and whether each already has a written chapter."""
+    from . import chapters as chapters_module
+
+    conn = _open(args)
+    zones = chapters_module.zones_in_discovery_order(conn)
+
+    if not zones:
+        print('No zones recorded yet. Import a capture first.')
+        return 1
+
+    for number, zone in enumerate(zones, 1):
+        row = conn.execute(
+            'SELECT created_at, length(text) AS len FROM summaries'
+            " WHERE summary_id = ?", ('chapter-%s' % chapters_module.zone_slug(zone),)
+        ).fetchone()
+        status = ('written, %d characters' % row['len']) if row else 'not written yet'
+        print('%2d. %-30s %s' % (number, zone, status))
+
+    print('\nWrite or update all of them with: chronicle')
+    print('Just one with: chronicle --zone "<name as shown above>"')
+    return 0
+
+
+def cmd_chronicle(args):
+    from . import chapters as chapters_module
+    from . import context as context_module
+
+    conn = _open(args)
+
+    if args.dry_run:
+        if not args.zone:
+            print('--dry-run needs --zone, so there is exactly one context to show.')
+            return 1
+        text, stats = context_module.build_chapter_context(
+            conn, args.zone, max_quests=args.max_quests)
+        print('Chapter: %s' % args.zone)
+        print('Drawn from %d quests, %d characters.\n' % (stats['quests'], stats['npcs']))
+        print('--- exactly what would be sent, and nothing else ---')
+        print(text)
+        print('--- end ---')
+        print('\nNothing was sent. Drop --dry-run to generate the chapter.')
+        return 0
+
+    from . import llm
+
+    zones = [args.zone] if args.zone else chapters_module.zones_in_discovery_order(conn)
+    if not zones:
+        print('No zones recorded yet. Import a capture first.')
+        return 1
+
+    generated, cached, failed = 0, 0, 0
+
+    for zone in zones:
+        print('%s ...' % zone, end=' ', flush=True)
+
+        def announce():
+            print('generating with %s, this can take a few minutes ...'
+                  % llm.MODEL, end=' ', flush=True)
+
+        try:
+            outcome = chapters_module.generate_and_save_chapter(
+                conn, zone, max_quests=args.max_quests, force=args.force,
+                on_will_generate=announce)
+        except llm.LlmUnavailable as exc:
+            print('failed')
+            print('  %s' % exc)
+            failed += 1
+            continue
+
+        if outcome.cached:
+            print('unchanged')
+            cached += 1
+        else:
+            print('done (%d quests, %d characters)'
+                  % (outcome.stats['quests'], outcome.stats['npcs']))
+            generated += 1
+
+    print('\n%d chapter(s) written or updated, %d unchanged, %d failed.'
+          % (generated, cached, failed))
+
+    if generated and not args.no_publish:
+        _publish_to_game(conn, args)
+
+    return 1 if failed and not generated else 0
 
 
 def cmd_rebuild(args):
@@ -364,6 +451,24 @@ def build_parser():
                        help='write stored recaps into the game as a generated addon')
     p.add_argument('--wow-path', help='World of Warcraft installation folder')
     p.set_defaults(func=cmd_publish)
+
+    p = sub.add_parser('chapters', help='list zones and their chapter status')
+    p.set_defaults(func=cmd_chapters)
+
+    p = sub.add_parser(
+        'chronicle',
+        help="write or update your character's full story, one chapter per zone")
+    p.add_argument('--zone', help='update just this one zone (as shown by `chapters`)')
+    p.add_argument('--dry-run', action='store_true',
+                   help='print exactly what would be sent for --zone, and send nothing')
+    p.add_argument('--force', action='store_true',
+                   help='regenerate even zones with no new content')
+    p.add_argument('--no-publish', action='store_true',
+                   help='do not write it into the game as a generated addon')
+    p.add_argument('--wow-path', help='World of Warcraft installation folder')
+    p.add_argument('--max-quests', type=int, default=None,
+                   help='cap how many quests go into each chapter')
+    p.set_defaults(func=cmd_chronicle)
 
     p = sub.add_parser('rebuild', help='rebuild derived tables from raw events')
     p.set_defaults(func=cmd_rebuild)

@@ -44,6 +44,7 @@ local VIEWS = {
     { key = "places", label = "Places" },
     { key = "threads", label = "Threads" },
     { key = "recaps", label = "Recaps" },
+    { key = "chronicle", label = "Chronicle" },
     { key = "search", label = "Search" },
 }
 
@@ -784,6 +785,79 @@ function Render.recaps()
 
     LayoutRows(count)
     showRequestButton()
+end
+
+local function RenderChapterDetail(chapter, number)
+    ShowListMode()
+    SetHeader("Chapter " .. number .. ": " .. (chapter.zone or "Unknown place"), "Chronicle")
+
+    local lines = {}
+    local function add(text) lines[#lines + 1] = text end
+
+    add(chapter.text or "")
+
+    if chapter.model then
+        add("\n|cff999999written by " .. chapter.model .. "|r")
+    end
+
+    ShowDetailMode(table.concat(lines, "\n"))
+end
+
+-- The character's whole story so far, one chapter per place, oldest first.
+-- This is the same underlying bridge as Recaps (a separate generated addon,
+-- one-way, companion to game - see Summaries.lua), just a different filter
+-- and a different, chronological rather than newest-first, sort order.
+function Render.chronicle()
+    ShowListMode()
+    SetHeader("Chronicle", "Your story so far")
+    HideActionButton()
+
+    local count = 0
+    local function addRow(title, detail, onClick)
+        count = count + 1
+        local row = AcquireRow(count)
+        row.title:SetText(title)
+        row.detail:SetText(detail or "")
+        row:SetScript("OnClick", onClick)
+        row:EnableMouse(onClick ~= nil)
+    end
+
+    if not (AC.Summaries and AC.Summaries.IsAddonPresent and AC.Summaries.IsAddonPresent()) then
+        addRow("No chronicle addon detected",
+            "Run `python companion/run.py chronicle` from the companion, which"
+            .. " publishes into the game automatically. Then enable"
+            .. " \"Azeroth Chronicle Summaries\" on the character-select"
+            .. " addon list and log in.")
+        LayoutRows(count)
+        return
+    end
+
+    local chapters = AC.Summaries.ChaptersForCurrentCharacter()
+
+    if #chapters == 0 then
+        addRow("No chapters written yet",
+            "Run `python companion/run.py chronicle` from the companion - it"
+            .. " writes one chapter per place you have visited. Generation"
+            .. " happens in the background and needs one more login or"
+            .. " /reload to appear here.")
+        LayoutRows(count)
+        return
+    end
+
+    for number, chapter in ipairs(chapters) do
+        local preview = (chapter.text or ""):gsub("\n", " ")
+        if #preview > 90 then
+            preview = preview:sub(1, 90) .. "..."
+        end
+
+        addRow("Chapter " .. number .. ": " .. (chapter.zone or "Unknown place"), preview,
+            function()
+                detailStack = {}
+                PushDetail(function() RenderChapterDetail(chapter, number) end)
+            end)
+    end
+
+    LayoutRows(count)
 end
 
 function Render.search()

@@ -27,43 +27,80 @@ local ADDON_NAME = ...
 AC = AC or {}
 AC.Summaries = {}
 
--- Every recap for the character currently logged in, newest first. Returns
--- an empty table, never nil and never an error, whether the generated addon
--- is absent, disabled, empty, or malformed - a missing recap should look
--- exactly like "none yet" everywhere that reads this.
+-- Every generated summary for the character currently logged in, of any
+-- kind, unsorted. Both recaps and chapters read from the same published
+-- table (see publish.py), and want different filters and different sort
+-- orders, so this does neither and leaves both to its callers.
+local function AllEntries()
+    local db = _G.AzerothChronicleSummariesDB
+    if type(db) ~= "table" then
+        return {}
+    end
+
+    local guid = UnitGUID("player")
+    local entries = guid and db[guid]
+    if type(entries) ~= "table" then
+        return {}
+    end
+
+    local list = {}
+    for _, entry in ipairs(entries) do
+        if type(entry) == "table" and entry.text then
+            list[#list + 1] = entry
+        end
+    end
+    return list
+end
+
+-- Runs any reader defensively: a missing, disabled, or malformed generated
+-- addon should look exactly like "nothing yet" everywhere this is read,
+-- never an error, since this table comes from outside code the addon does
+-- not control.
+local function SafeRead(fn)
+    local ok, result = pcall(fn)
+    if ok then
+        return result
+    end
+    if AC.Debug and AC.Debug.Error then
+        AC.Debug.Error("Summaries", result)
+    end
+    return {}
+end
+
+-- Session recaps, newest first - "what did I just do."
 function AC.Summaries.ForCurrentCharacter()
-    local ok, result = pcall(function()
-        local db = _G.AzerothChronicleSummariesDB
-        if type(db) ~= "table" then
-            return {}
-        end
-
-        local guid = UnitGUID("player")
-        local entries = guid and db[guid]
-        if type(entries) ~= "table" then
-            return {}
-        end
-
+    return SafeRead(function()
         local list = {}
-        for _, entry in ipairs(entries) do
-            if type(entry) == "table" and entry.text then
+        for _, entry in ipairs(AllEntries()) do
+            if entry.kind == "session_recap" or entry.kind == nil then
                 list[#list + 1] = entry
             end
         end
-
         table.sort(list, function(a, b)
             return (a.windowEnd or 0) > (b.windowEnd or 0)
         end)
         return list
     end)
+end
 
-    if ok then
-        return result
-    end
-    if AC.Debug and AC.Debug.Error then
-        AC.Debug.Error("Summaries.ForCurrentCharacter", result)
-    end
-    return {}
+-- Zone chapters, oldest first - "the story so far, from the beginning."
+-- Ordered by windowStart, which the companion sets to the zone's earliest
+-- recorded activity, so chapter order matches the order the character
+-- actually visited these places rather than when each chapter was last
+-- (re)written.
+function AC.Summaries.ChaptersForCurrentCharacter()
+    return SafeRead(function()
+        local list = {}
+        for _, entry in ipairs(AllEntries()) do
+            if entry.kind == "zone_chapter" then
+                list[#list + 1] = entry
+            end
+        end
+        table.sort(list, function(a, b)
+            return (a.windowStart or 0) < (b.windowStart or 0)
+        end)
+        return list
+    end)
 end
 
 -- Whether the generated addon is present at all, so the pane can tell "you

@@ -152,6 +152,163 @@ def _npcs_in_window(conn, start, end):
         ' ORDER BY n.first_seen_at', (start, end)).fetchall()
 
 
+def _quests_in_zone(conn, zone):
+    """Quests linked to a zone by at least one event actually recorded there.
+
+    A quest is not permanently tied to one zone in the schema - some chains
+    send the player elsewhere partway through - so this reflects wherever
+    the player actually was while touching it, the same association the
+    in-game Places view already uses. A quest whose lifecycle crossed zones
+    can legitimately appear in more than one chapter.
+    """
+    return conn.execute(
+        'SELECT DISTINCT q.* FROM quests q'
+        ' JOIN events e ON e.character_id = q.character_id'
+        "   AND json_extract(e.raw_payload_json, '$.quest.id') = q.quest_id"
+        ' WHERE e.zone = ?'
+        ' ORDER BY COALESCE(q.turned_in_at, q.accepted_at, q.first_seen_at)',
+        (zone,)).fetchall()
+
+
+def _dialogue_for_quest_all_time(conn, quest_id):
+    """Every line for a quest, with no time bound.
+
+    A chapter has no window to filter by - it covers a zone across however
+    much of the character's whole history touches it, which is the point
+    of a chapter next to a session recap rather than a difference to hide.
+    """
+    return conn.execute(
+        'SELECT dialogue_type, text, timestamp FROM dialogue'
+        ' WHERE quest_id = ? ORDER BY timestamp', (quest_id,)).fetchall()
+
+
+def _npcs_in_zone(conn, zone):
+    return conn.execute(
+        'SELECT DISTINCT n.npc_key, n.display_name, n.first_zone, n.first_seen_at'
+        ' FROM npcs n'
+        ' JOIN dialogue d ON d.npc_key = n.npc_key'
+        ' JOIN events e ON e.event_id = d.event_id'
+        ' WHERE e.zone = ?'
+        ' ORDER BY n.first_seen_at', (zone,)).fetchall()
+
+
+def build_chapter_context(conn, zone, max_quests=None):
+    """Render everything captured in one zone as a chapter of the
+    character's ongoing chronicle.
+
+    Unlike a session recap, this has no time window: it covers every quest,
+    conversation and milestone ever tied to this zone, however far apart in
+    real time they happened, because a WoW zone is often returned to across
+    an entire leveling arc rather than finished in one sitting. Calling this
+    again after more play in the same zone is expected to produce a longer,
+    fuller chapter, not a new one - see chapters.py for how that update is
+    stored.
+    """
+    character = conn.execute('SELECT * FROM characters LIMIT 1').fetchone()
+    quests = _quests_in_zone(conn, zone)
+
+    truncated = 0
+    if max_quests is not None and len(quests) > max_quests:
+        truncated = len(quests) - max_quests
+        quests = quests[:max_quests]
+
+    lines = []
+    add = lines.append
+
+    add('PLAYER CHARACTER')
+    if character:
+        descriptor = ' '.join(
+            str(part) for part in (character['race'], character['class']) if part)
+        add('  %s, a %s' % (character['name'], descriptor or 'adventurer'))
+        if character['faction']:
+            add('  Faction: %s' % character['faction'])
+        if character['level_last_seen']:
+            add('  Level at the time of writing: %s' % character['level_last_seen'])
+    add('')
+
+    add('THIS CHAPTER COVERS: %s' % zone)
+    add('')
+
+    add('QUESTS IN THIS CHAPTER')
+    if not quests:
+        add('  (none recorded here yet)')
+
+    for quest in quests:
+        add('')
+        add('  --- %s ---' % (quest['title'] or 'Quest %s' % quest['quest_id']))
+
+        state = 'turned in' if quest['turned_in_at'] else (
+            'abandoned' if quest['abandoned_at'] else 'still in progress')
+        add('  Status: %s' % state)
+
+        if quest['giver_npc_key']:
+            giver = conn.execute(
+                'SELECT display_name FROM npcs WHERE npc_key = ?',
+                (quest['giver_npc_key'],)).fetchone()
+            if giver and giver['display_name']:
+                add('  Given by: %s' % giver['display_name'])
+
+        if quest['known_from_snapshot']:
+            add('  Note: this quest was already being carried before recording'
+                ' began, so how it started was never observed.')
+
+        if quest['description']:
+            add('  What the character was told:')
+            add('    ' + quest['description'].replace('\n', '\n    '))
+        if quest['objectives_text']:
+            add('  The task: %s' % quest['objectives_text'])
+
+        seen_text = set()
+        for line in _dialogue_for_quest_all_time(conn, quest['quest_id']):
+            body = (line['text'] or '').strip()
+            if not body or body in seen_text:
+                continue
+            seen_text.add(body)
+            label = DIALOGUE_LABELS.get(line['dialogue_type'], line['dialogue_type'])
+            add('  What was %s: %s' % (label, body))
+
+        completion = (quest['completion_text'] or '').strip()
+        if completion and completion not in seen_text:
+            add('  On completion: %s' % completion)
+
+        rewards = []
+        if quest['xp_reward']:
+            rewards.append('%s experience' % quest['xp_reward'])
+        money = _format_money(quest['money_reward'])
+        if money:
+            rewards.append(money)
+        if rewards:
+            add('  Reward: %s' % ', '.join(rewards))
+
+    if truncated:
+        add('')
+        add('  (%d further quests tied to this zone were left out of this'
+            ' context to keep it manageable)' % truncated)
+
+    npcs = _npcs_in_zone(conn, zone)
+    if npcs:
+        add('')
+        add('CHARACTERS MET IN THIS CHAPTER')
+        for npc in npcs:
+            add('  %s' % (npc['display_name'] or npc['npc_key']))
+
+    levels = conn.execute(
+        "SELECT raw_payload_json, timestamp FROM events"
+        " WHERE event_type = 'PLAYER_LEVEL_UP' AND zone = ?"
+        ' ORDER BY timestamp', (zone,)).fetchall()
+    if levels:
+        add('')
+        add('MILESTONES REACHED HERE')
+        for row in levels:
+            payload = json.loads(row['raw_payload_json'])
+            level = (payload.get('progression') or {}).get('level')
+            add('  Reached level %s' % level)
+
+    text = '\n'.join(lines)
+    stats = {'quests': len(quests), 'npcs': len(npcs), 'truncated_quests': truncated}
+    return text, stats
+
+
 def _format_money(copper):
     if not copper:
         return None

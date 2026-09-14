@@ -23,12 +23,15 @@ MIGRATIONS = ROOT / 'companion' / 'migrations'
 
 def make_row(text, summary_id='r1', character_id='Player-1-A', window_start=100,
             window_end=200, model='qwen2.5:7b-instruct', created_at=300,
-            kind='session_recap'):
-    return {
+            kind='session_recap', zone=None):
+    row = {
         'summary_id': summary_id, 'character_id': character_id, 'kind': kind,
         'window_start': window_start, 'window_end': window_end, 'model': model,
         'created_at': created_at, 'text': text,
     }
+    if zone is not None:
+        row['zone'] = zone
+    return row
 
 
 class TestLuaStringSafety(unittest.TestCase):
@@ -111,6 +114,21 @@ class TestBuildDataFile(unittest.TestCase):
         lua = publish_module.build_data_file({})
         self.assertIn('AzerothChronicleSummariesDB = {', lua)
         self.assertTrue(lua.strip().endswith('}'))
+
+    def test_chapter_rows_carry_a_zone_field(self):
+        rows = {'Player-1-A': [
+            make_row('a chapter', kind='zone_chapter', zone='Teldrassil'),
+        ]}
+        lua = publish_module.build_data_file(rows)
+        self.assertIn('["zone"] = "Teldrassil"', lua)
+
+    def test_session_recap_rows_carry_no_zone_field(self):
+        # zone is None for a recap row (no key at all, as a real DB row
+        # would have); the addon must have no way to mistake a recap for
+        # a chapter by an accidental stray field.
+        rows = {'Player-1-A': [make_row('a recap', kind='session_recap')]}
+        lua = publish_module.build_data_file(rows)
+        self.assertNotIn('["zone"]', lua)
 
 
 class TestBuildToc(unittest.TestCase):

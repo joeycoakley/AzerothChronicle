@@ -255,6 +255,70 @@ so rather than implying you tested it.
   `quit_app` is plausible-looking code, not something I confirmed executes
   correctly. Say so; don't imply more than that was checked.
 
+## Before you touch chapters (`chapters.py`, `context.build_chapter_context`)
+
+- **A chapter's identity is the zone, not its content hash - this is the one
+  deliberate divergence from how `recap.py` works, not an inconsistency to
+  "fix."** A session recap is closed and immutable, so two different
+  sessions must always get two different rows forever. A zone is the
+  opposite: the player will very likely return and do more there weeks
+  later, so a chapter needs **one stable row per zone that updates in
+  place**. `chapters.py` keys the row on `chapter-<zone slug>` and only uses
+  the content hash to decide whether regeneration is needed, never as the
+  row's identity. Do not copy `recap.py`'s hash-as-id pattern here; that
+  would spawn a new competing "Teldrassil" row every time the zone's content
+  changed instead of updating the one that exists.
+- **`build_chapter_context` has no time window**, deliberately - it draws
+  every quest and every line of dialogue ever tied to that zone, however far
+  apart in real time, because a WoW zone is routinely revisited across an
+  entire leveling arc. Do not add a `start`/`end` window to it; that would
+  turn a chapter back into a session recap with extra steps.
+- **The `zones` table, not raw `events.zone` values, decides which zones get
+  chapters.** Checked against the real database during development: it
+  correctly excludes `"Unknown"`, a placeholder value that appears on
+  events when position capture briefly fails, which appears on raw events
+  but is never recorded as an entry in `zones` (see `CaptureZoneDiscovery`
+  in `Core.lua`, which explicitly skips it). A chapters feature keyed on
+  distinct `events.zone` values would generate a "Chapter: Unknown."
+- **Chapters get more context and output room than recaps**
+  (`CHAPTER_NUM_CTX`, `CHAPTER_MAX_OUTPUT_TOKENS` in `chapters.py`), not the
+  same constants - a whole zone's history is routinely larger than one
+  session's. Neither is raised to the model's full trained context; this
+  hardware measurably struggles with a 7B model already, and a larger KV
+  cache means less of it fits in 6GB of VRAM, pushing more of the run onto
+  the slower CPU path.
+- **The chapter system prompt is not just a longer version of the recap
+  prompt** - a chapter is framed as one place across the character's whole
+  history, not a recent stretch of play, and needs its own instruction to
+  reflect a return visit rather than flattening it into one continuous
+  visit. `llm.CHAPTER_SYSTEM_PROMPT` is the intentionally distinct constant;
+  don't collapse it into `SYSTEM_PROMPT` with a parameter.
+- **A real generation surfaced three failures worth knowing before touching
+  the prompts again**, documented in full in `companion/README.md`'s
+  chronicle section: Markdown headers despite an explicit rule against them
+  (fixed with `llm._strip_markdown`, a defensive strip applied regardless of
+  what the prompt says, not a substitute for the instruction); a persistent
+  "ready for what comes next" ending that survived two independent prompt
+  rewrites, including one with no quotable negative example to imitate
+  (accepted as a known limitation - it never names anything specific, so it
+  is stylistic noise, not an actual spoiler, and further prompt iteration
+  hit clearly diminishing returns); and one instance of a real invented
+  detail about an NPC not grounded in captured text, which is the one that
+  actually matters, since it touches the core honesty rule rather than
+  style. Do not remove the caveats about these from the README as if the
+  feature "works now" - the markdown fix is solid and verified; the other
+  two are accepted, documented tradeoffs of a small local model, not solved
+  problems.
+- **Giving a model a banned phrase as a negative example can backfire.** The
+  first attempt at fixing the "story is far from over" ending quoted that
+  exact phrase as something not to write, and the regeneration produced
+  "the journey was far from over" - nearly a verbatim echo, not an avoidance.
+  The second attempt used a purely positive instruction ("your last sentence
+  must describe something the character actually did") with no quotable
+  template, which did not fully eliminate the pattern but is the right
+  general approach for a small model. Prefer positive instructions over
+  negative examples when refining prompts here.
+
 ## Current priorities
 
 WoW Forever beta opens 2026-09-17, launch 2026-11-04. It is Classic-plus, built

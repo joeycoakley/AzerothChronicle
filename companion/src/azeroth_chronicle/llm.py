@@ -25,6 +25,7 @@ against the source context rather than trusting it outright.
 """
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 
@@ -61,7 +62,9 @@ invented or imported detail spoils it.
 few people and finished one errand" is a fine recap of a quiet session.
 
 3. Never speculate about what happens next, what a character is secretly \
-planning, or where a story is heading. The player has not learned that yet.
+planning, or where a story is heading. The player has not learned that yet. Your \
+last sentence must describe something the character actually did, said, or was \
+given in this session - not what they might face, wonder, or discover afterward.
 
 4. Write as a chronicle addressed to the player, in second person, past tense. \
 Name the characters and places they actually met. Prefer their own quest text's \
@@ -70,7 +73,85 @@ framing over your own.
 5. Be concise. A few short paragraphs. Do not list every quest mechanically; \
 tell the through-line of the session and what it meant for the character.
 
-6. Do not use headers, bullet points, or markdown. This is prose."""
+6. Plain prose only: no markdown of any kind. That means no lines starting with \
+#, no ##, no bullet points or numbered lists, no bold or italic asterisks. Write \
+paragraphs exactly as they would appear in a printed book, with nothing but \
+letters and ordinary punctuation at the start of a line."""
+
+# A chapter and a session recap share every honesty rule - only captured
+# text, say when it's thin, never speculate ahead - but not the framing.
+# A recap is "what just happened"; a chapter is "this place, across
+# whatever of the character's whole history touches it," which is why the
+# instruction below asks for a chapter of an ongoing chronicle rather than
+# a summary of a session, even though the underlying rules are identical.
+CHAPTER_SYSTEM_PROMPT = """You write one chapter of an ongoing chronicle for a \
+World of Warcraft player, covering everything their character has experienced \
+in a single place, however much real time that took.
+
+Rules, in order of importance:
+
+1. Use only the supplied player-history context. Every name, place, motive and \
+event must appear in it. You know a great deal about Warcraft; none of that may \
+enter this chapter. The player is discovering this story for the first time and \
+an invented or imported detail spoils it.
+
+2. If the context is thin, say so plainly rather than padding. A place the \
+character passed through briefly deserves a short chapter, not a padded one.
+
+3. Never speculate about what happens next, what a character is secretly \
+planning, or where the story goes from here - this chapter's place here may not \
+even be finished, more may happen in this place later, but that is not this \
+chapter's business. Your last sentence must describe something the character \
+actually did, said, or was given while here - not what they might face, wonder, \
+or discover afterward.
+
+4. Write as a chapter of the character's own story, in second person, past \
+tense. Name the people and events they actually encountered. Prefer their own \
+quest text's framing over your own. Where the record shows the character left \
+and returned, or a quest sat unresolved for a time, let the chapter reflect that \
+shape rather than flattening it into one continuous visit.
+
+5. Tell the throughline of this place in the character's journey - what \
+brought them here, what they did, who they met, what it left them having done -
+rather than listing every quest mechanically. If several quests here were \
+clearly one continuous errand, a natural in-text transition ("From there, ...") \
+tells that better than a new section heading would.
+
+6. Plain prose only: no markdown of any kind. That means no lines starting with \
+#, no ##, no bullet points or numbered lists, no bold or italic asterisks. This \
+one chapter is a handful of paragraphs, written exactly as they would appear in \
+a printed book, with nothing but letters and ordinary punctuation at the start \
+of a line."""
+
+
+_MARKDOWN_HEADER = re.compile(r'^#{1,6}\s*', re.MULTILINE)
+_MARKDOWN_BULLET = re.compile(r'^[-*+]\s+', re.MULTILINE)
+_MARKDOWN_BOLD = re.compile(r'\*\*(.+?)\*\*')
+_MARKDOWN_ITALIC = re.compile(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)')
+
+
+def _strip_markdown(text):
+    """Remove Markdown a model wrote despite being told not to.
+
+    The instruction is in the system prompt, but a small local model does
+    not always follow it - the first real chapter generated during
+    development came back with "### A Chapter of the Forest" style
+    headers, which would render as literal hash characters in the addon's
+    plain-text display rather than as anything resembling a heading. This
+    is not optional cleanup; without it, a model that ignores the
+    instruction produces visibly broken output in-game.
+
+    Deliberately narrow: headers and bullets are stripped down to their
+    text since those are unambiguous line-start markers, and bold/italic
+    markers are unwrapped rather than deleted so the words survive. This
+    cannot catch every way a model might violate "plain prose," only the
+    concrete pattern actually observed.
+    """
+    text = _MARKDOWN_HEADER.sub('', text)
+    text = _MARKDOWN_BULLET.sub('', text)
+    text = _MARKDOWN_BOLD.sub(r'\1', text)
+    text = _MARKDOWN_ITALIC.sub(r'\1', text)
+    return text
 
 
 class LlmUnavailable(Exception):
@@ -96,9 +177,19 @@ def is_available(base_url=None):
         return False
 
 
-def summarize(context_text, system_prompt=None, model=None, base_url=None,
-             max_output_tokens=MAX_OUTPUT_TOKENS):
-    """Send one context to the local model and return the recap text."""
+def summarize(context_text, system_prompt=None, instruction=None, model=None,
+             base_url=None, max_output_tokens=MAX_OUTPUT_TOKENS, num_ctx=None):
+    """Send one context to the local model and return the recap text.
+
+    `num_ctx` is left unset (Ollama's own runtime default) unless a caller
+    asks for more - a chapter covering a whole zone's history can be far
+    larger than one session, and left to a small ambient default the model
+    would simply see less of the context than the prompt actually contains,
+    silently. Not raised to the model's full trained limit here even when
+    requested: this hardware measurably struggles with a 7B model already,
+    and a bigger KV cache means less of it fits in the 6GB of VRAM observed
+    during development, pushing more of the run onto the slower CPU path.
+    """
     base_url = base_url or DEFAULT_BASE_URL
     model = model or MODEL
 
@@ -112,15 +203,20 @@ def summarize(context_text, system_prompt=None, model=None, base_url=None,
             'Nothing here ever needs a paid API key or sends your journal over\n'
             'the network.' % base_url)
 
+    options = {'num_predict': max_output_tokens}
+    if num_ctx is not None:
+        options['num_ctx'] = num_ctx
+
     try:
         response = _post(base_url, '/api/chat', {
             'model': model,
             'messages': [
                 {'role': 'system', 'content': system_prompt or SYSTEM_PROMPT},
-                {'role': 'user', 'content': 'Recap this stretch of play.\n\n' + context_text},
+                {'role': 'user', 'content': (instruction or 'Recap this stretch of play.')
+                 + '\n\n' + context_text},
             ],
             'stream': False,
-            'options': {'num_predict': max_output_tokens},
+            'options': options,
         })
     except urllib.error.HTTPError as exc:
         body = exc.read().decode('utf-8', 'replace')
@@ -144,6 +240,8 @@ def summarize(context_text, system_prompt=None, model=None, base_url=None,
     text = ((response.get('message') or {}).get('content') or '').strip()
     if not text:
         raise LlmUnavailable('The model returned no text.')
+
+    text = _strip_markdown(text).strip()
 
     return {
         'text': text,
